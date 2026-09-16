@@ -15,6 +15,7 @@ import type { Signer } from "@4evergent/stellar";
 import { AgentScheduler } from "./scheduler.js";
 import { ScheduleExecutionService } from "./schedule-execution.js";
 import { ExecutionQueue } from "./execution-queue.js";
+import { ExecutionRecoveryService } from "./execution-recovery.js";
 import type { ExecutionRecord } from "@4evergent/database";
 import type { ScheduleExecutionResult } from "./schedule-execution.js";
 import {
@@ -100,7 +101,7 @@ export interface ServerOptions {
 
 const DEFAULT_OWNER = "dev-owner";
 
-export function createApiServer(options: ServerOptions) {
+export async function createApiServer(options: ServerOptions) {
   const store: ActivityStore =
     options.activityStore ??
     (options.dbPath ? new SQLiteActivityStore(options.dbPath) : new InMemoryActivityStore());
@@ -137,7 +138,24 @@ export function createApiServer(options: ServerOptions) {
     options.executionStore ??
     (options.dbPath ? new SQLiteExecutionStore(options.dbPath) : new InMemoryExecutionStore());
 
+  // --- Execution recovery setup ---
+  const recoveryService = new ExecutionRecoveryService(executionStore);
   let executionQueue: ExecutionQueue | null = null;
+
+  // Run crash recovery BEFORE starting the queue worker.
+  if (options.executionQueue?.enabled) {
+    try {
+      const recoveryResult = await recoveryService.recover();
+      if (recoveryResult.found > 0) {
+        console.log(
+          `[execution-recovery] recovered ${recoveryResult.recovered}/${recoveryResult.found} stuck executions`
+        );
+      }
+    } catch (err) {
+      console.error("[execution-recovery] recovery failed:", err);
+    }
+  }
+
   if (options.executionQueue?.enabled) {
     const getSourceAccount = async () => {
       const account = await adapter.getAccount(options.signer.getAccountId());
@@ -867,6 +885,7 @@ export function createApiServer(options: ServerOptions) {
     executionStore,
     scheduler,
     executionQueue,
+    recoveryService,
   };
 }
 

@@ -58,6 +58,7 @@ export interface ExecutionStore {
   listDue(before: string, limit?: number): Promise<ExecutionRecord[]>;
   listByOwner(ownerId: string, limit?: number): Promise<ExecutionRecord[]>;
   listByAgent(agentId: string, limit?: number): Promise<ExecutionRecord[]>;
+  listStuckExecuting(limit?: number): Promise<ExecutionRecord[]>;
   update(id: string, patch: Partial<ExecutionRecord>): Promise<ExecutionRecord | null>;
   delete(id: string): Promise<boolean>;
 }

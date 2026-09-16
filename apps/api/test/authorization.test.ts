@@ -52,7 +52,7 @@ function makeAgent(id: string, ownerId: string, status = "active") {
 }
 
 async function startServer(opts: { policyRules?: Partial<PolicyRules>; requestContext: { ownerId: string } }) {
-  const server = createApiServer({
+  const server = await createApiServer({
     port: 0,
     horizonUrl: "https://horizon-testnet.stellar.org",
     signer: new MockSigner("test-agent"),

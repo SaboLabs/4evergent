@@ -42,7 +42,7 @@ const TEST_AGENT = {
 
 async function startServer(opts?: { policyRules?: Partial<PolicyRules>; signer?: Signer }) {
   const signer = opts?.signer ?? new MockSigner("test-agent");
-  const server = createApiServer({
+  const server = await createApiServer({
     port: 0,
     horizonUrl: "https://horizon-testnet.stellar.org",
     signer,
