@@ -19,13 +19,15 @@ import {
   SQLiteApprovalStore,
   assertNoSecrets,
   validateApprovalTransition,
+  ResourceAuthorizationService,
+  type AuthorizationContext,
   type ActivityStore,
   type ApprovalStore,
   type ApprovalRecord,
   type ApprovalStatus,
   type ActivityRecord,
 } from "@4evergent/database";
-import type { PolicyRules, Agent } from "@4evergent/shared";
+import type { PolicyRules, Agent, RequestContext, AuthorizationService } from "@4evergent/shared";
 
 const TESTNET_PASSPHRASE = "Test SDF Network ; September 2015";
 
@@ -51,6 +53,10 @@ interface ApprovalResponse {
 
 const agents = new Map<string, Agent>();
 
+export function clearAgents() {
+  agents.clear();
+}
+
 export interface ServerOptions {
   port: number;
   horizonUrl: string;
@@ -59,8 +65,12 @@ export interface ServerOptions {
   activityStore?: ActivityStore;
   approvalStore?: ApprovalStore;
   dbPath?: string;
-  deferExecution?: boolean; // if true, approve() only marks approved, doesn't execute
+  deferExecution?: boolean;
+  requestContext?: RequestContext;
+  authorizationService?: AuthorizationService;
 }
+
+const DEFAULT_OWNER = "dev-owner";
 
 export function createApiServer(options: ServerOptions) {
   const store: ActivityStore =
@@ -69,6 +79,16 @@ export function createApiServer(options: ServerOptions) {
   const approvals: ApprovalStore =
     options.approvalStore ??
     (options.dbPath ? new SQLiteApprovalStore(options.dbPath) : new InMemoryApprovalStore());
+
+  const defaultAuthzCtx: AuthorizationContext = {
+    activityStore: store,
+    approvalStore: approvals,
+    agents: agents as Map<string, { id: string; ownerId: string }>,
+  };
+  const authorizationService: AuthorizationService =
+    options.authorizationService ?? new ResourceAuthorizationService(defaultAuthzCtx);
+
+  const requestCtx: RequestContext = options.requestContext ?? { ownerId: DEFAULT_OWNER };
   const pipeline = new TransactionPipeline({
     horizonUrl: options.horizonUrl,
     networkPassphrase: TESTNET_PASSPHRASE,
@@ -107,11 +127,13 @@ export function createApiServer(options: ServerOptions) {
   });
 
   async function handleListAgents(_req: any, res: any) {
-    const agentList = [...agents.values()].map((a) => ({
+    const all = [...agents.values()];
+    const filtered = all.filter((a) => a.ownerId === requestCtx.ownerId);
+    const agentList = filtered.map((a) => ({
       id: a.id,
       displayName: a.displayName,
       description: a.description,
-      owner: a.owner,
+      ownerId: a.ownerId,
       stellarAddress: a.stellarAddress,
       capabilities: a.capabilities,
       active: a.active,
@@ -125,6 +147,8 @@ export function createApiServer(options: ServerOptions) {
     const match = urlObj.pathname.match(/^\/agents\/([^/]+)\/activity$/);
     const agentId = match?.[1];
     if (!agentId) return json(res, { error: "invalid agent id in path" }, 400);
+    const allowed = await authorizationService.canAccessAgent(requestCtx, agentId);
+    if (!allowed) return json(res, { error: "not found" }, 404);
     const limit = Math.max(1, Math.min(100, Number(urlObj.searchParams.get("limit") ?? 50) || 50));
     const activity = await store.listByAgent(agentId, limit);
     return json(res, { agentId, activity });
@@ -133,7 +157,7 @@ export function createApiServer(options: ServerOptions) {
   async function handleListApprovals(req: any, res: any) {
     const urlObj = new URL(req.url ?? "", "http://localhost");
     const statusFilter = urlObj.searchParams.get("status") ?? undefined;
-    const all = await approvals.listAll(200);
+    const all = await approvals.listByOwner(requestCtx.ownerId, 200);
     const filtered = statusFilter
       ? all.filter((r) => r.status === statusFilter).slice(0, 50)
       : all.slice(0, 50);
@@ -169,19 +193,21 @@ export function createApiServer(options: ServerOptions) {
     }
 
     if (!agents.has(agentId)) return json(res, { error: "agent not found" }, 404);
+    const canSubmit = await authorizationService.canSubmitIntent(requestCtx, agentId);
+    if (!canSubmit) return json(res, { error: "not found" }, 404);
 
     const decision = await policy.evaluate(intent, agentId);
 
     if (decision.result === "deny") {
       // Pipeline creates the record and returns its id.
-      const outcome = await pipeline.execute({ intent, sourceAccount: { agentId } as any });
+      const outcome = await pipeline.execute({ intent, sourceAccount: { agentId, ownerId: requestCtx.ownerId } as any });
       const denied = outcome.activityId ? await store.get(outcome.activityId) : null;
       return json(res, toIntentResponse(denied!), 403);
     }
 
     if (decision.result === "requires_approval") {
       // Delegate to pipeline — it persists activity + approval atomically.
-      const outcome = await pipeline.execute({ intent, sourceAccount: { agentId } as any });
+      const outcome = await pipeline.execute({ intent, sourceAccount: { agentId, ownerId: requestCtx.ownerId } as any });
       if (outcome.status === "requires_approval" && outcome.activityId) {
         const pending = await store.get(outcome.activityId);
         assertNoSecrets(pending!);
@@ -200,9 +226,10 @@ export function createApiServer(options: ServerOptions) {
         sequenceNumber: () => account.sequence,
         incrementSequenceNumber: () => {},
         agentId,
+        ownerId: requestCtx.ownerId,
       };
     } catch (e) {
-      const failed = makeActivity(intent, agentId, decision, "failed", null, `Unable to load source account: ${(e as Error).message}`);
+      const failed = makeActivity(intent, agentId, requestCtx.ownerId, decision, "failed", null, `Unable to load source account: ${(e as Error).message}`);
       await store.record(failed);
       return json(res, toIntentResponse(failed), 502);
     }
@@ -262,6 +289,9 @@ export function createApiServer(options: ServerOptions) {
       return json(res, toApprovalResponse(approvalId, "", "rejected", "approval not found"), 404);
     }
 
+    const canApprove = await authorizationService.canApprove(requestCtx, approvalId);
+    if (!canApprove) return json(res, toApprovalResponse(approvalId, "", "rejected", "approval not found"), 404);
+
     const transitionError = validateApprovalTransition(approval.status, "approved");
     if (transitionError) {
       return json(res, toApprovalResponse(approvalId, approval.activityId, approval.status, `cannot approve: ${transitionError}`), 409);
@@ -306,6 +336,9 @@ export function createApiServer(options: ServerOptions) {
     if (!approval) {
       return json(res, toApprovalResponse(approvalId, "", "rejected", "approval not found"), 404);
     }
+
+    const canReject = await authorizationService.canReject(requestCtx, approvalId);
+    if (!canReject) return json(res, toApprovalResponse(approvalId, "", "rejected", "approval not found"), 404);
 
     const transitionError = validateApprovalTransition(approval.status, "rejected");
     if (transitionError) {
@@ -353,6 +386,7 @@ export function createApiServer(options: ServerOptions) {
 function makeActivity(
   intent: AgentIntent,
   agentId: string,
+  ownerId: string,
   policyDecision: PolicyDecision,
   status: string,
   authorizationStatus: string | null,
@@ -362,6 +396,7 @@ function makeActivity(
   return {
     id: crypto.randomUUID(),
     agentId,
+    ownerId,
     intent,
     policyDecision,
     authorizationStatus: authorizationStatus as any,

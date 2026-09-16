@@ -15,13 +15,26 @@ export interface Agent {
   id: string;
   displayName: string;
   description: string;
-  owner: string;
+  ownerId: string;
   stellarAddress: string;
   capabilities: string[];
   createdAt: string;
   updatedAt: string;
   active: boolean;
   metadata: Record<string, unknown>;
+}
+
+export interface RequestContext {
+  ownerId: string;
+}
+
+export interface AuthorizationService {
+  canAccessAgent(ctx: RequestContext, agentId: string): Promise<boolean>;
+  canAccessActivity(ctx: RequestContext, activityId: string): Promise<boolean>;
+  canAccessApproval(ctx: RequestContext, approvalId: string): Promise<boolean>;
+  canSubmitIntent(ctx: RequestContext, agentId: string): Promise<boolean>;
+  canApprove(ctx: RequestContext, approvalId: string): Promise<boolean>;
+  canReject(ctx: RequestContext, approvalId: string): Promise<boolean>;
 }
 
 export type IntentType = "payment" | "trustline" | "contract_call" | "account_settings";
@@ -93,6 +106,7 @@ export type AuthorizationStatus =
 export interface ActivityRecord {
   id: string;
   agentId: string;
+  ownerId: string;
   intent: AgentIntent;
   policyDecision: PolicyDecision;
   authorizationStatus: AuthorizationStatus | null;

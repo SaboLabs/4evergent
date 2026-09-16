@@ -31,7 +31,7 @@ const TEST_AGENT = {
   id: "test-agent",
   displayName: "Test",
   description: "test agent",
-  owner: "test",
+  ownerId: "test",
   stellarAddress: "GDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
   capabilities: [],
   createdAt: new Date().toISOString(),
@@ -47,6 +47,7 @@ async function startServer(opts?: { policyRules?: Partial<PolicyRules>; signer?:
     horizonUrl: "https://horizon-testnet.stellar.org",
     signer,
     policyRules: opts?.policyRules,
+    requestContext: { ownerId: "test" },
   });
   server.registerAgent(TEST_AGENT);
 

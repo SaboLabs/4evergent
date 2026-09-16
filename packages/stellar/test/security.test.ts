@@ -208,9 +208,9 @@ test("SEC: executeApproved rejects nonexistent approval", async () => {
 test("SEC: executeApproved rejects pending (not approved) record", async () => {
   const { pipeline, signer, approval, activity } = makePipeline({});
   const intent = paymentIntent("50");
-  const act = createActivity("agent-a", intent, { result: "requires_approval", reason: "t", rule: "t", intent });
+  const act = createActivity("agent-a", "owner-a", intent, { result: "requires_approval", reason: "t", rule: "t", intent });
   await activity.record(act);
-  const appr = createApproval(act.id, "agent-a", intent, { result: "requires_approval", reason: "t", rule: "t", intent }, null);
+  const appr = createApproval(act.id, "agent-a", "owner-a", intent, { result: "requires_approval", reason: "t", rule: "t", intent }, null);
   await approval.record(appr);
 
   const result = await pipeline.executeApproved(appr.id);
@@ -223,10 +223,10 @@ test("SEC: executeApproved rejects expired approval", async () => {
   const { pipeline, signer, approval, activity } = makePipeline({});
   const intent = paymentIntent("50");
   const decision: PolicyDecision = { result: "requires_approval", reason: "t", rule: "t", intent };
-  const act = createActivity("agent-a", intent, decision);
+  const act = createActivity("agent-a", "owner-a", intent, decision);
   await activity.record(act);
   const past = new Date(Date.now() - 1000).toISOString();
-  const appr = createApproval(act.id, "agent-a", intent, decision, past);
+  const appr = createApproval(act.id, "agent-a", "owner-a", intent, decision, past);
   appr.status = "approved";
   await approval.record(appr);
 
@@ -245,9 +245,9 @@ test("SEC: second executeApproved on submitted record does not re-sign", async (
   const { pipeline, signer, approval, activity } = makePipeline({});
   const intent = paymentIntent("50");
   const decision: PolicyDecision = { result: "requires_approval", reason: "t", rule: "t", intent };
-  const act = createActivity("agent-a", intent, decision);
+  const act = createActivity("agent-a", "owner-a", intent, decision);
   await activity.record(act);
-  const appr = createApproval(act.id, "agent-a", intent, decision, null);
+  const appr = createApproval(act.id, "agent-a", "owner-a", intent, decision, null);
   appr.status = "submitted";
   appr.txHash = "already-submitted-hash";
   await approval.record(appr);
@@ -264,7 +264,7 @@ test("SEC: second executeApproved on submitted record does not re-sign", async (
 test("SEC: daily limit denies when cumulative spending exceeded", async () => {
   const activity = new InMemoryActivityStore();
   // Seed a submitted transaction that consumed 90 XLM today, using a valid Stellar address
-  const prior = createActivity("agent-a", paymentIntent("90"), { result: "allow", reason: "t", rule: "t", intent: paymentIntent("90") });
+  const prior = createActivity("agent-a", "owner-a", paymentIntent("90"), { result: "allow", reason: "t", rule: "t", intent: paymentIntent("90") });
   prior.status = "submitted";
   await activity.record(prior);
 
@@ -285,7 +285,7 @@ test("SEC: daily limit denies when cumulative spending exceeded", async () => {
 
 test("SEC: daily limit allows when under cumulative cap", async () => {
   const activity = new InMemoryActivityStore();
-  const prior = createActivity("agent-a", paymentIntent("30"), { result: "allow", reason: "t", rule: "t", intent: paymentIntent("30") });
+  const prior = createActivity("agent-a", "owner-a", paymentIntent("30"), { result: "allow", reason: "t", rule: "t", intent: paymentIntent("30") });
   prior.status = "submitted";
   await activity.record(prior);
 

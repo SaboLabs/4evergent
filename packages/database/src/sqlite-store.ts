@@ -20,7 +20,7 @@ import type {
  * database server required. Data persists across process restarts in a file
  * at the path provided to the constructor.
  *
- * Schema is versioned in _meta (schema_version = 1). initSchema() is
+ * Schema is versioned in _meta (schema_version = 2). initSchema() is
  * idempotent and safe to call on every construction.
  */
 export class SQLiteActivityStore implements ActivityStore {
@@ -34,11 +34,12 @@ export class SQLiteActivityStore implements ActivityStore {
   private initSchema(): void {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS _meta (key TEXT PRIMARY KEY, value TEXT);
-      INSERT OR IGNORE INTO _meta (key, value) VALUES ('schema_version', '1');
+      INSERT OR IGNORE INTO _meta (key, value) VALUES ('schema_version', '2');
 
       CREATE TABLE IF NOT EXISTS activities (
         id TEXT PRIMARY KEY,
         agent_id TEXT NOT NULL,
+        owner_id TEXT NOT NULL,
         intent_json TEXT NOT NULL,
         policy_decision_json TEXT NOT NULL,
         authorization_status TEXT,
@@ -52,6 +53,7 @@ export class SQLiteActivityStore implements ActivityStore {
 
       CREATE INDEX IF NOT EXISTS idx_activities_agent ON activities(agent_id);
       CREATE INDEX IF NOT EXISTS idx_activities_status ON activities(status);
+      CREATE INDEX IF NOT EXISTS idx_activities_owner ON activities(owner_id);
     `);
   }
 
@@ -59,14 +61,15 @@ export class SQLiteActivityStore implements ActivityStore {
     this.db
       .prepare(
         `INSERT OR REPLACE INTO activities
-         (id, agent_id, intent_json, policy_decision_json, authorization_status,
+         (id, agent_id, owner_id, intent_json, policy_decision_json, authorization_status,
           simulation_result_json, tx_hash, status, error, created_at, updated_at)
-         VALUES (@id, @agent_id, @intent_json, @policy_decision_json, @authorization_status,
+         VALUES (@id, @agent_id, @owner_id, @intent_json, @policy_decision_json, @authorization_status,
                  @simulation_result_json, @tx_hash, @status, @error, @created_at, @updated_at)`
       )
       .run({
         id: record.id,
         agent_id: record.agentId,
+        owner_id: record.ownerId,
         intent_json: JSON.stringify(record.intent),
         policy_decision_json: JSON.stringify(record.policyDecision),
         authorization_status: record.authorizationStatus,
@@ -110,6 +113,20 @@ export class SQLiteActivityStore implements ActivityStore {
     return rows.map((r) => rowToActivityRecord(r as unknown as ActivityRow));
   }
 
+  async listByOwner(ownerId: string, limit = 50): Promise<ActivityRecord[]> {
+    const rows = this.db
+      .prepare("SELECT * FROM activities WHERE owner_id = ? ORDER BY created_at DESC LIMIT ?")
+      .all(ownerId, limit);
+    return rows.map((r) => rowToActivityRecord(r as unknown as ActivityRow));
+  }
+
+  async getForOwner(id: string, ownerId: string): Promise<ActivityRecord | null> {
+    const row = this.db
+      .prepare("SELECT * FROM activities WHERE id = ? AND owner_id = ?")
+      .get(id, ownerId);
+    return row ? rowToActivityRecord(row as unknown as ActivityRow) : null;
+  }
+
   async update(id: string, patch: Partial<ActivityRecord>): Promise<ActivityRecord | null> {
     const existing = await this.get(id);
     if (!existing) return null;
@@ -146,12 +163,13 @@ export class SQLiteApprovalStore implements ApprovalStore {
   private initSchema(): void {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS _meta (key TEXT PRIMARY KEY, value TEXT);
-      INSERT OR IGNORE INTO _meta (key, value) VALUES ('schema_version', '1');
+      INSERT OR IGNORE INTO _meta (key, value) VALUES ('schema_version', '2');
 
       CREATE TABLE IF NOT EXISTS approvals (
         id TEXT PRIMARY KEY,
         activity_id TEXT NOT NULL,
         agent_id TEXT NOT NULL,
+        owner_id TEXT NOT NULL,
         intent_json TEXT NOT NULL,
         policy_decision_json TEXT NOT NULL,
         status TEXT NOT NULL,
@@ -170,6 +188,7 @@ export class SQLiteApprovalStore implements ApprovalStore {
       CREATE INDEX IF NOT EXISTS idx_approvals_agent ON approvals(agent_id);
       CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals(status);
       CREATE INDEX IF NOT EXISTS idx_approvals_activity ON approvals(activity_id);
+      CREATE INDEX IF NOT EXISTS idx_approvals_owner ON approvals(owner_id);
       CREATE UNIQUE INDEX IF NOT EXISTS idx_approvals_activity_one
         ON approvals(activity_id) WHERE status = 'pending_approval';
     `);
@@ -196,15 +215,16 @@ export class SQLiteApprovalStore implements ApprovalStore {
     this.db
       .prepare(
         `INSERT INTO approvals
-         (id, activity_id, agent_id, intent_json, policy_decision_json, status,
+         (id, activity_id, agent_id, owner_id, intent_json, policy_decision_json, status,
           requested_at, approved_at, rejected_at, expired_at, approver, expires_at,
           tx_hash, error, created_at, updated_at)
-         VALUES (@id, @activity_id, @agent_id, @intent_json, @policy_decision_json, @status,
+         VALUES (@id, @activity_id, @agent_id, @owner_id, @intent_json, @policy_decision_json, @status,
                  @requested_at, @approved_at, @rejected_at, @expired_at, @approver, @expires_at,
                  @tx_hash, @error, @created_at, @updated_at)
          ON CONFLICT(id) DO UPDATE SET
            activity_id = excluded.activity_id,
            agent_id = excluded.agent_id,
+           owner_id = excluded.owner_id,
            intent_json = excluded.intent_json,
            policy_decision_json = excluded.policy_decision_json,
            status = excluded.status,
@@ -222,6 +242,7 @@ export class SQLiteApprovalStore implements ApprovalStore {
         id: record.id,
         activity_id: record.activityId,
         agent_id: record.agentId,
+        owner_id: record.ownerId,
         intent_json: JSON.stringify(record.intent),
         policy_decision_json: JSON.stringify(record.policyDecision),
         status: record.status,
@@ -267,6 +288,20 @@ export class SQLiteApprovalStore implements ApprovalStore {
     return rows.map((r) => rowToApprovalRecord(r as unknown as ApprovalRow));
   }
 
+  async listByOwner(ownerId: string, limit = 50): Promise<ApprovalRecord[]> {
+    const rows = this.db
+      .prepare("SELECT * FROM approvals WHERE owner_id = ? ORDER BY created_at DESC LIMIT ?")
+      .all(ownerId, limit);
+    return rows.map((r) => rowToApprovalRecord(r as unknown as ApprovalRow));
+  }
+
+  async getForOwner(id: string, ownerId: string): Promise<ApprovalRecord | null> {
+    const row = this.db
+      .prepare("SELECT * FROM approvals WHERE id = ? AND owner_id = ?")
+      .get(id, ownerId);
+    return row ? rowToApprovalRecord(row as unknown as ApprovalRow) : null;
+  }
+
   async update(id: string, patch: Partial<ApprovalRecord>): Promise<ApprovalRecord | null> {
     const existing = await this.get(id);
     if (!existing) return null;
@@ -283,6 +318,7 @@ export class SQLiteApprovalStore implements ApprovalStore {
 interface ActivityRow {
   id: string;
   agent_id: string;
+  owner_id: string;
   intent_json: string;
   policy_decision_json: string;
   authorization_status: string | null;
@@ -298,6 +334,7 @@ interface ApprovalRow {
   id: string;
   activity_id: string;
   agent_id: string;
+  owner_id: string;
   intent_json: string;
   policy_decision_json: string;
   status: string;
@@ -317,9 +354,10 @@ function rowToActivityRecord(row: ActivityRow): ActivityRecord {
   return {
     id: row.id,
     agentId: row.agent_id,
+    ownerId: row.owner_id,
     intent: JSON.parse(row.intent_json) as AgentIntent,
     policyDecision: JSON.parse(row.policy_decision_json) as PolicyDecision,
-    authorizationStatus: (row.authorization_status as AuthorizationStatus | null) ?? null,
+    authorizationStatus: row.authorization_status as AuthorizationStatus | null,
     simulationResult: row.simulation_result_json
       ? (JSON.parse(row.simulation_result_json) as SimulationResult)
       : null,
@@ -336,6 +374,7 @@ function rowToApprovalRecord(row: ApprovalRow): ApprovalRecord {
     id: row.id,
     activityId: row.activity_id,
     agentId: row.agent_id,
+    ownerId: row.owner_id,
     intent: JSON.parse(row.intent_json) as AgentIntent,
     policyDecision: JSON.parse(row.policy_decision_json) as PolicyDecision,
     status: row.status as ApprovalStatus,

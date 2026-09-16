@@ -20,6 +20,8 @@ export interface ActivityStore {
   listByAgent(agentId: string, limit?: number): Promise<ActivityRecord[]>;
   listByStatus(agentId: string, status: string, limit?: number): Promise<ActivityRecord[]>;
   listAll(limit?: number): Promise<ActivityRecord[]>;
+  listByOwner(ownerId: string, limit?: number): Promise<ActivityRecord[]>;
+  getForOwner(id: string, ownerId: string): Promise<ActivityRecord | null>;
   update(id: string, patch: Partial<ActivityRecord>): Promise<ActivityRecord | null>;
 }
 
@@ -42,6 +44,8 @@ export interface ApprovalStore {
   listByAgent(agentId: string, limit?: number): Promise<ApprovalRecord[]>;
   listByStatus(agentId: string, status: string, limit?: number): Promise<ApprovalRecord[]>;
   listAll(limit?: number): Promise<ApprovalRecord[]>;
+  listByOwner(ownerId: string, limit?: number): Promise<ApprovalRecord[]>;
+  getForOwner(id: string, ownerId: string): Promise<ApprovalRecord | null>;
   update(id: string, patch: Partial<ApprovalRecord>): Promise<ApprovalRecord | null>;
 }
 
@@ -59,6 +63,7 @@ export interface ApprovalRecord {
   id: string;
   activityId: string;
   agentId: string;
+  ownerId: string;
   intent: AgentIntent;
   policyDecision: PolicyDecision;
   status: ApprovalStatus;
@@ -113,6 +118,18 @@ export class InMemoryActivityStore implements ActivityStore {
       .slice(0, limit);
   }
 
+  async listByOwner(ownerId: string, limit = 50): Promise<ActivityRecord[]> {
+    return [...this.records.values()]
+      .filter((r) => r.ownerId === ownerId)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .slice(0, limit);
+  }
+
+  async getForOwner(id: string, ownerId: string): Promise<ActivityRecord | null> {
+    const rec = this.records.get(id);
+    return rec?.ownerId === ownerId ? rec : null;
+  }
+
   async update(id: string, patch: Partial<ActivityRecord>): Promise<ActivityRecord | null> {
     const existing = this.records.get(id);
     if (!existing) return null;
@@ -158,6 +175,18 @@ export class InMemoryApprovalStore implements ApprovalStore {
       .slice(0, limit);
   }
 
+  async listByOwner(ownerId: string, limit = 50): Promise<ApprovalRecord[]> {
+    return [...this.records.values()]
+      .filter((r) => r.ownerId === ownerId)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .slice(0, limit);
+  }
+
+  async getForOwner(id: string, ownerId: string): Promise<ApprovalRecord | null> {
+    const rec = this.records.get(id);
+    return rec?.ownerId === ownerId ? rec : null;
+  }
+
   async update(id: string, patch: Partial<ApprovalRecord>): Promise<ApprovalRecord | null> {
     const existing = this.records.get(id);
     if (!existing) return null;
@@ -189,6 +218,7 @@ export function assertNoSecrets(record: ActivityRecord | ApprovalRecord): void {
  */
 export function createActivity(
   agentId: string,
+  ownerId: string,
   intent: AgentIntent,
   policyDecision: PolicyDecision
 ): ActivityRecord {
@@ -196,6 +226,7 @@ export function createActivity(
   return {
     id: crypto.randomUUID(),
     agentId,
+    ownerId,
     intent,
     policyDecision,
     authorizationStatus: null,
@@ -214,6 +245,7 @@ export function createActivity(
 export function createApproval(
   activityId: string,
   agentId: string,
+  ownerId: string,
   intent: AgentIntent,
   policyDecision: PolicyDecision,
   expiresAt?: string | null
@@ -223,6 +255,7 @@ export function createApproval(
     id: crypto.randomUUID(),
     activityId,
     agentId,
+    ownerId,
     intent,
     policyDecision,
     status: "pending_approval",
@@ -281,3 +314,7 @@ export type { ActivityRecord, AgentIntent, AuthorizationStatus, PolicyDecision, 
 
 // SQLite-backed persistent stores
 export { SQLiteActivityStore, SQLiteApprovalStore } from "./sqlite-store.js";
+
+// Authorization service
+export { ResourceAuthorizationService } from "./authorization.js";
+export type { AuthorizationContext } from "./authorization.js";

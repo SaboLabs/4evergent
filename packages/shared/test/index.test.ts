@@ -6,7 +6,7 @@ test("Agent type is structurally valid", () => {
     id: "agent_1",
     displayName: "Test",
     description: "test",
-    owner: "GOWNER",
+    ownerId: "GOWNER",
     stellarAddress: "GADDR",
     capabilities: ["payment"],
     createdAt: new Date().toISOString(),

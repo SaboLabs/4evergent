@@ -38,7 +38,7 @@ function runStoreTests(name: string, makeStores: () => { activity: ActivityStore
   test(`${name}: write/read activity round-trips`, async () => {
     const { activity, cleanup } = makeStores();
     try {
-      const rec = createActivity("agent-a", makeIntent("5"), makeDecision());
+      const rec = createActivity("agent-a", "owner-a", makeIntent("5"), makeDecision());
       await activity.record(rec);
       const got = await activity.get(rec.id);
       assert.deepEqual(got, rec);
@@ -50,9 +50,9 @@ function runStoreTests(name: string, makeStores: () => { activity: ActivityStore
   test(`${name}: write/read approval round-trips`, async () => {
     const { activity, approval, cleanup } = makeStores();
     try {
-      const act = createActivity("agent-a", makeIntent("5"), makeDecision());
+      const act = createActivity("agent-a", "owner-a", makeIntent("5"), makeDecision());
       await activity.record(act);
-      const appr = createApproval(act.id, "agent-a", makeIntent("5"), makeDecision(), null);
+      const appr = createApproval(act.id, "agent-a", "owner-a", makeIntent("5"), makeDecision(), null);
       await approval.record(appr);
       const got = await approval.get(appr.id);
       assert.deepEqual(got, appr);
@@ -64,8 +64,8 @@ function runStoreTests(name: string, makeStores: () => { activity: ActivityStore
   test(`${name}: listByAgent filters by agent`, async () => {
     const { activity, cleanup } = makeStores();
     try {
-      const a = createActivity("agent-a", makeIntent("1"), makeDecision());
-      const b = createActivity("agent-b", makeIntent("1"), makeDecision());
+      const a = createActivity("agent-a", "owner-a", makeIntent("1"), makeDecision());
+      const b = createActivity("agent-b", "owner-b", makeIntent("1"), makeDecision());
       await activity.record(a);
       await activity.record(b);
       const list = await activity.listByAgent("agent-a");
@@ -79,9 +79,9 @@ function runStoreTests(name: string, makeStores: () => { activity: ActivityStore
   test(`${name}: listByStatus filters correctly`, async () => {
     const { activity, cleanup } = makeStores();
     try {
-      const a = createActivity("agent-a", makeIntent("1"), makeDecision());
+      const a = createActivity("agent-a", "owner-a", makeIntent("1"), makeDecision());
       a.status = "submitted";
-      const b = createActivity("agent-a", makeIntent("1"), makeDecision());
+      const b = createActivity("agent-a", "owner-a", makeIntent("1"), makeDecision());
       b.status = "rejected";
       await activity.record(a);
       await activity.record(b);
@@ -96,7 +96,7 @@ function runStoreTests(name: string, makeStores: () => { activity: ActivityStore
   test(`${name}: update mutates and returns record`, async () => {
     const { activity, cleanup } = makeStores();
     try {
-      const rec = createActivity("agent-a", makeIntent("1"), makeDecision());
+      const rec = createActivity("agent-a", "owner-a", makeIntent("1"), makeDecision());
       await activity.record(rec);
       const updated = await activity.update(rec.id, { status: "submitted", txHash: "abc123" });
       assert.equal(updated!.status, "submitted");
@@ -111,8 +111,8 @@ function runStoreTests(name: string, makeStores: () => { activity: ActivityStore
   test(`${name}: listAll returns all records across agents`, async () => {
     const { activity, cleanup } = makeStores();
     try {
-      const a = createActivity("agent-a", makeIntent("1"), makeDecision());
-      const b = createActivity("agent-b", makeIntent("2"), makeDecision());
+      const a = createActivity("agent-a", "owner-a", makeIntent("1"), makeDecision());
+      const b = createActivity("agent-b", "owner-b", makeIntent("2"), makeDecision());
       await activity.record(a);
       await activity.record(b);
       const all = await activity.listAll(50);
@@ -129,7 +129,7 @@ function runStoreTests(name: string, makeStores: () => { activity: ActivityStore
     const { activity, cleanup } = makeStores();
     try {
       for (let i = 0; i < 5; i++) {
-        await activity.record(createActivity("agent-a", makeIntent(String(i)), makeDecision()));
+        await activity.record(createActivity("agent-a", "owner-a", makeIntent(String(i)), makeDecision()));
       }
       const all = await activity.listAll(3);
       assert.equal(all.length, 3);
@@ -159,13 +159,13 @@ function runStoreTests(name: string, makeStores: () => { activity: ActivityStore
   });
 
   test(`${name}: assertNoSecrets rejects secret-bearing records`, () => {
-    const rec = createActivity("agent-a", makeIntent("1"), makeDecision());
+    const rec = createActivity("agent-a", "owner-a", makeIntent("1"), makeDecision());
     rec.error = "failed because private_key was wrong";
     assert.throws(() => assertNoSecrets(rec), /forbidden key material/);
   });
 
   test(`${name}: approval record has no secret fields`, () => {
-    const appr = createApproval("act-1", "agent-a", makeIntent("1"), makeDecision(), null);
+    const appr = createApproval("act-1", "agent-a", "owner-a", makeIntent("1"), makeDecision(), null);
     const keys = Object.keys(appr);
     assert.ok(!keys.some((k) => /secret|seed|private|mnemonic/i.test(k)));
   });
@@ -194,13 +194,13 @@ test("SQLite: second pending approval for same activity is rejected", async () =
   try {
     const actStore = new SQLiteActivityStore(path);
     const apprStore = new SQLiteApprovalStore(path);
-    const act = createActivity("agent-a", makeIntent("5"), makeDecision());
+    const act = createActivity("agent-a", "owner-a", makeIntent("5"), makeDecision());
     await actStore.record(act);
 
-    const a1 = createApproval(act.id, "agent-a", makeIntent("5"), makeDecision(), null);
+    const a1 = createApproval(act.id, "agent-a", "owner-a", makeIntent("5"), makeDecision(), null);
     await apprStore.record(a1);
 
-    const a2 = createApproval(act.id, "agent-a", makeIntent("5"), makeDecision(), null);
+    const a2 = createApproval(act.id, "agent-a", "owner-a", makeIntent("5"), makeDecision(), null);
     await assert.rejects(
       () => apprStore.record(a2),
       /already has a pending approval/
@@ -223,10 +223,10 @@ test("SQLite: update existing approval (status transition) still works", async (
   try {
     const actStore = new SQLiteActivityStore(path);
     const apprStore = new SQLiteApprovalStore(path);
-    const act = createActivity("agent-a", makeIntent("5"), makeDecision());
+    const act = createActivity("agent-a", "owner-a", makeIntent("5"), makeDecision());
     await actStore.record(act);
 
-    const a1 = createApproval(act.id, "agent-a", makeIntent("5"), makeDecision(), null);
+    const a1 = createApproval(act.id, "agent-a", "owner-a", makeIntent("5"), makeDecision(), null);
     await apprStore.record(a1);
 
     // Transition to approved — upsert path must succeed (same id)
@@ -235,7 +235,7 @@ test("SQLite: update existing approval (status transition) still works", async (
     assert.equal(updated!.status, "approved");
 
     // No pending approval exists now, so a new one may be created
-    const a2 = createApproval(act.id, "agent-a", makeIntent("5"), makeDecision(), null);
+    const a2 = createApproval(act.id, "agent-a", "owner-a", makeIntent("5"), makeDecision(), null);
     await apprStore.record(a2);
     const got = await apprStore.get(a2.id);
     assert.ok(got, "new pending after approval transition must succeed");
@@ -252,7 +252,7 @@ test("SQLite: activity survives store reopen (restart simulation)", async () => 
   try {
     const id = "persist-test-id";
     const store1 = new SQLiteActivityStore(path);
-    const rec = createActivity("agent-a", makeIntent("7"), makeDecision());
+    const rec = createActivity("agent-a", "owner-a", makeIntent("7"), makeDecision());
     rec.id = id;
     await store1.record(rec);
     store1.close();
@@ -278,8 +278,8 @@ test("SQLite: approval survives store reopen (restart simulation)", async () => 
   try {
     const id = "persist-approval-id";
     const store1 = new SQLiteApprovalStore(path);
-    const act = createActivity("agent-a", makeIntent("7"), makeDecision());
-    const appr = createApproval(act.id, "agent-a", makeIntent("7"), makeDecision(), null);
+    const act = createActivity("agent-a", "owner-a", makeIntent("7"), makeDecision());
+    const appr = createApproval(act.id, "agent-a", "owner-a", makeIntent("7"), makeDecision(), null);
     appr.id = id;
     await store1.record(appr);
     store1.close();
@@ -302,7 +302,7 @@ test("SQLite: schema is versioned in _meta", async () => {
     store.close();
     // Reopen — initSchema must be idempotent and not fail
     const store2 = new SQLiteActivityStore(path);
-    const rec = createActivity("agent-a", makeIntent("1"), makeDecision());
+    const rec = createActivity("agent-a", "owner-a", makeIntent("1"), makeDecision());
     await store2.record(rec);
     const got = await store2.get(rec.id);
     assert.ok(got);

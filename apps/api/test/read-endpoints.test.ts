@@ -30,7 +30,7 @@ const TEST_AGENT = {
   id: "test-agent",
   displayName: "Test Agent",
   description: "test agent",
-  owner: "test",
+  ownerId: "test",
   stellarAddress: "GDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
   capabilities: ["payment"],
   createdAt: new Date().toISOString(),
@@ -46,6 +46,7 @@ async function startServer(opts?: { policyRules?: Partial<PolicyRules>; register
     signer: new MockSigner("test-agent"),
     policyRules: opts?.policyRules,
     deferExecution: true,
+    requestContext: { ownerId: "test" },
   });
   if (opts?.registerAgent !== false) {
     server.registerAgent(TEST_AGENT);
@@ -144,13 +145,12 @@ test("GET /agents/:id/activity returns persisted activity", async () => {
   }
 });
 
-test("GET /agents/:id/activity returns empty list for unknown agent", async () => {
+test("GET /agents/:id/activity returns 404 for unknown/non-owned agent", async () => {
   const { baseUrl, close } = await startServer();
   try {
     const res = await get(baseUrl, "/agents/nonexistent-agent/activity");
-    assert.equal(res.status, 200);
-    assert.equal(res.body.agentId, "nonexistent-agent");
-    assert.deepEqual(res.body.activity, []);
+    // Authorization rejects non-owned agents with 404 (not found)
+    assert.equal(res.status, 404);
   } finally {
     await close();
   }

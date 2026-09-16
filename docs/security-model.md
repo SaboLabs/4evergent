@@ -138,6 +138,45 @@ Approval state is recorded in the activity log. An approval is bound to a specif
 
 Async fire-and-forget execution (after approve) uses `setImmediate`. If the process exits or the execution throws, the approval remains in `executing`/`approved` state with no retry or dead-letter queue. A future phase will add an execution queue with retry + dead-letter semantics.
 
+## Phase 5: Authorization & Ownership Model
+
+Every agent has an `ownerId`. Authorization is enforced server-side via `RequestContext` + `ResourceAuthorizationService`:
+
+```
+Agent {
+  id: string;
+  ownerId: string;
+  stellarAddress: string;
+  capabilities: string[];
+}
+
+ActivityRecord {
+  id: string;
+  agentId: string;
+  ownerId: string;
+  intent: AgentIntent;
+  status: string;
+}
+
+ApprovalRecord {
+  id: string;
+  agentId: string;
+  ownerId: string;
+  status: ApprovalStatus;
+}
+```
+
+**Authorization Rules:**
+- Caller can only read/write own agents
+- Caller can only read own activity
+- Caller can only read own approvals
+- Caller can only approve/reject own approvals
+- Cross-owner access returns 404 (not 403) to avoid leaking existence
+
+**Development Identity:** In dev/test, identity is deterministic via `ServerOptions.requestContext: { ownerId }`. No production auth is implemented.
+
+**Known Limitation:** Identity mechanism is abstraction-ready but NOT production-ready. No OAuth/JWT/wallet auth implemented.
+
 ## Emergency Disable Mechanism
 
 (Future work in MVP, but planned as a core primitive)

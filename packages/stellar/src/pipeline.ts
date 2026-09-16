@@ -65,10 +65,11 @@ export class TransactionPipeline {
     }
 
     const agentId = (sourceAccount as any)?.agentId ?? (sourceAccount as any)?.accountId?.() ?? "unknown";
+    const ownerId = (sourceAccount as any)?.ownerId ?? "unknown";
     const decision = await this.policy.evaluate(intent, agentId);
 
     if (decision.result === "deny") {
-      const denied = createActivity(agentId, intent, decision);
+      const denied = createActivity(agentId, ownerId, intent, decision);
       denied.status = "rejected";
       denied.authorizationStatus = "denied_by_policy";
       denied.error = decision.reason;
@@ -84,11 +85,11 @@ export class TransactionPipeline {
 
     if (decision.result === "requires_approval") {
       if (this.activityStore && this.approvalStore) {
-        const activity = createActivity(agentId, intent, decision);
+        const activity = createActivity(agentId, ownerId, intent, decision);
         activity.status = "requires_approval";
         activity.authorizationStatus = "pending_approval";
         const expiresAt = new Date(Date.now() + this.approvalTtlSeconds * 1000).toISOString();
-        const approval = createApproval(activity.id, agentId, intent, decision, expiresAt);
+        const approval = createApproval(activity.id, agentId, ownerId, intent, decision, expiresAt);
         await this.activityStore.record(activity);
         await this.approvalStore.record(approval);
         return {
@@ -115,7 +116,7 @@ export class TransactionPipeline {
         message: `Transaction construction failed: ${e.message}`,
         policyDecision: decision,
         simulationResult: null,
-        activityId: await this.recordActivity(agentId, intent, decision, "rejected", null, e.message),
+        activityId: await this.recordActivity(agentId, ownerId, intent, decision, "rejected", null, e.message),
       };
     }
 
@@ -126,7 +127,7 @@ export class TransactionPipeline {
         message: simResult.error ?? "Simulation failed",
         policyDecision: decision,
         simulationResult: simResult,
-        activityId: await this.recordActivity(agentId, intent, decision, "failed", "denied_by_simulation", simResult.error ?? "Simulation failed"),
+        activityId: await this.recordActivity(agentId, ownerId, intent, decision, "failed", "denied_by_simulation", simResult.error ?? "Simulation failed"),
       };
     }
 
@@ -139,7 +140,7 @@ export class TransactionPipeline {
         message: `Signing failed: ${e.message}`,
         policyDecision: decision,
         simulationResult: simResult,
-        activityId: await this.recordActivity(agentId, intent, decision, "failed", "signing_failed", e.message),
+        activityId: await this.recordActivity(agentId, ownerId, intent, decision, "failed", "signing_failed", e.message),
       };
     }
 
@@ -151,7 +152,7 @@ export class TransactionPipeline {
         policyDecision: decision,
         simulationResult: simResult,
         txHash: result.hash,
-        activityId: await this.recordActivity(agentId, intent, decision, "submitted", "approved", null, result.hash, simResult),
+        activityId: await this.recordActivity(agentId, ownerId, intent, decision, "submitted", "approved", null, result.hash, simResult),
       };
     } catch (e: any) {
       return {
@@ -159,7 +160,7 @@ export class TransactionPipeline {
         message: `Submission failed: ${e.message}`,
         policyDecision: decision,
         simulationResult: simResult,
-        activityId: await this.recordActivity(agentId, intent, decision, "failed", "submission_failed", e.message),
+        activityId: await this.recordActivity(agentId, ownerId, intent, decision, "failed", "submission_failed", e.message),
       };
     }
   }
@@ -309,6 +310,7 @@ export class TransactionPipeline {
 
   private async recordActivity(
     agentId: string,
+    ownerId: string,
     intent: AgentIntent,
     policyDecision: PolicyDecision,
     status: string,
@@ -318,7 +320,7 @@ export class TransactionPipeline {
     simulationResult?: any
   ): Promise<string | undefined> {
     if (!this.activityStore) return undefined;
-    const activity = createActivity(agentId, intent, policyDecision);
+    const activity = createActivity(agentId, ownerId, intent, policyDecision);
     activity.status = status as any;
     activity.authorizationStatus = authorizationStatus as any;
     activity.error = error;

@@ -50,3 +50,27 @@ export default function App() {
     </div>
   );
 }
+
+export function ErrorDisplay({ status, message }: { status?: number; message: string }) {
+  if (status === 401 || status === 403) {
+    return (
+      <div className="error">
+        <strong>Access Denied</strong>
+        <p>{message}</p>
+      </div>
+    );
+  }
+  if (status === 404) {
+    return (
+      <div className="empty-state">
+        <h2>Not Found</h2>
+        <p>{message}</p>
+      </div>
+    );
+  }
+  return (
+    <div className="error">
+      <p>{message}</p>
+    </div>
+  );
+}
