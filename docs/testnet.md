@@ -51,7 +51,7 @@ npx tsx -e "import { StellarAdapter } from './src/index.ts'; const a=new Stellar
 ## Run the test suite
 
 ```bash
-pnpm test  # all packages (50 database + 15 stellar + 10 API + agent-core tests)
+pnpm test  # all packages (81 tests: shared 3, agent-core 11, policy 15, database 27, stellar 15, api 10)
 ```
 
 Integration tests run against in-memory HTTP servers with deterministic mocks. No live testnet calls are made by CI tests. The SQLite stores are tested with on-disk temp files under `os.tmpdir()` and verified to survive store reopen (restart simulation). Live testnet submission has NOT been performed in this phase.

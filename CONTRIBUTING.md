@@ -26,12 +26,12 @@ pnpm build
 ├── packages/
 │   ├── agent-core/       # IntentValidator, StellarAdapter
 │   ├── policy/           # PolicyEngine (deterministic)
-│   ├── stellar/          # Transaction construction + simulation (future)
-│   ├── database/         # Schema + client (future)
+│   ├── stellar/          # Transaction pipeline (build → simulate → sign → submit)
+│   ├── database/         # In-memory + SQLite stores (activity, approvals)
 │   └── shared/           # Shared types & schemas
 ├── contracts/
-│   ├── agent-registry/   # Soroban agent-registry contract (future)
-│   └── permissions/      # Soroban permissions contract (future)
+│   ├── agent-registry/   # Soroban agent-registry contract (scaffolded, not compiled)
+│   └── permissions/      # Soroban permissions contract (scaffolded, not compiled)
 ├── docs/
 ├── tests/
 ├── scripts/

@@ -149,12 +149,13 @@ No capability is considered complete without: schema validation, policy coverage
 
 | Phase | Goal | Status |
 |-------|------|--------|
-| 1 | Agent identity, policy engine, intent validation, Stellar read adapter, activity logging | ✅ MVP slice |
-| 2 | Full transaction pipeline (construct → simulate → sign → submit) on testnet | Future |
-| 3 | Soroban AgentRegistry contract (register/update/deactivate/query) | Future |
-| 4 | Soroban Permissions contract (delegation + revocation) | Future |
-| 5 | Frontend agent dashboard (discover, profile, activity) | Future |
-| 6 | Multi-agent capability discovery & economy | Future |
+| 1 | Agent identity, policy engine, intent validation, Stellar read adapter, activity logging | ✅ Shipped |
+| 2 | Full transaction pipeline (construct → simulate → authorize → sign → submit) with Signer abstraction | ✅ Shipped |
+| 3 | Persistent SQLite stores, approval/reject HTTP endpoints, daily limit enforcement | ✅ Shipped |
+| 4 | Soroban AgentRegistry contract (register/update/deactivate/query) | Future |
+| 5 | Soroban Permissions contract (delegation + revocation) | Future |
+| 6 | Frontend agent dashboard (discover, profile, activity) | Future |
+| 7 | Multi-agent capability discovery & economy | Future |
 
 ---
 

@@ -3,12 +3,12 @@
 | Phase | Goal | Status |
 |-------|------|--------|
 | 1 | Agent identity types, policy engine, intent validation, Stellar read adapter | Shipped |
-|| 2 | Full transaction pipeline (construct → simulate → authorize → sign → submit) with Signer abstraction | **Shipped** |
-|| 3 | Persistent SQLite stores, approval/reject HTTP endpoints, daily limit enforcement from activity state | **Shipped** |
-|| 4 | Soroban AgentRegistry contract (register/update/deactivate/query) | Scaffolded, not compiled |
-| 4 | Soroban Permissions contract (delegation + revocation) | Scaffolded, not compiled |
-| 5 | Frontend agent dashboard (discovery, profile, activity) | Future |
-| 6 | Multi-agent capability discovery & agent-to-agent economy | Future |
+| 2 | Full transaction pipeline (construct → simulate → authorize → sign → submit) with Signer abstraction | **Shipped** |
+| 3 | Persistent SQLite stores, approval/reject HTTP endpoints, daily limit enforcement from activity state | **Shipped** |
+| 4 | Soroban AgentRegistry contract (register/update/deactivate/query) | Scaffolded, not compiled |
+| 5 | Soroban Permissions contract (delegation + revocation) | Scaffolded, not compiled |
+| 6 | Frontend agent dashboard (discovery, profile, activity) | Future |
+| 7 | Multi-agent capability discovery & agent-to-agent economy | Future |
 
 ## Phase 2 Details (Shipped)
 
@@ -22,8 +22,8 @@
 - **TransactionPipeline** (`packages/stellar/src/pipeline.ts`): orchestrates the ordered gate chain — validate → policy → authorize → construct → simulate → sign → submit → record. The only public entry point.
 - **Activity storage** (`packages/database/src/index.ts`): in-memory activity log with `assertNoSecrets()` guard. Records intent, policy decision, authorization status, simulation result, tx hash, status, timestamps.
 - **API server** (`apps/api/src/index.ts`): `POST /agents/:id/intents` endpoint implementing the full pipeline. Returns 400 for malformed/raw input, 403 for policy DENY, 202 for requires_approval, 200 for submitted. `GET /health` endpoint.
-- **Security tests** (16 tests): verify DENY prevents construction, failed simulation prevents signing, amount above limit never reaches signer, unauthorized asset/destination never reach signer, approval-required never reaches signer before approval, signer interface has no key-exposing methods, mainnet config cannot use TestnetLocalSigner.
-- **Integration tests** (15 tests): verify API rejects raw XDR, returns 403 for denied intents, 202 for approval-required, 400 for unsupported intent types, records activity for all outcomes, never leaks secrets in responses.
+- **Security tests** (15 tests): verify DENY prevents construction, failed simulation prevents signing, amount above limit never reaches signer, unauthorized asset/destination never reach signer, approval-required never reaches signer before approval, signer interface has no key-exposing methods.
+- **Integration tests** (10 tests): verify API rejects raw XDR, returns 403 for denied intents, 202 for approval-required, 400 for unsupported intent types, records activity for all outcomes, never leaks secrets in responses.
 
 ### Phase 3 Details (Shipped)
 
@@ -34,7 +34,8 @@
 - **Daily spending limit enforcement** (`packages/policy/src/engine.ts`): `PolicyEngine.evaluate()` is now `async` and accepts an `ActivityStore`. `getDailySpent()` reads the current UTC day's `submitted` activities for the agent and deducts from the daily limit. Read-then-write; no transactional lock.
 - **Pipeline integration** (`packages/stellar/src/pipeline.ts`): `TransactionPipeline` accepts optional `activityStore`/`approvalStore` in constructor. `execute()` records every outcome (denied/submitted/failed/simulation_failed). New `executeApproved(approvalId, approver)` method reconstructs the intent from the stored approval, re-runs construction+simulation+signing+submission, and updates the approval status to `submitted`/`failed`/`expired`/`executing`.
 - **API server auto-selects store** (`apps/api/src/index.ts`): if `dbPath` provided → SQLite stores; else → in-memory. `assertNoSecrets()` invoked on every record returned through the API.
-- **Security tests** (15 tests + 10 integration tests): all pass. Tests prove daily limit deny when cumulative exceeded, daily limit allow when under cap, executeApproved rejects nonexistent/pending/expired, double-approval is blocked, raw XDR injection is rejected at approve/reject endpoints.
+- **Security tests** (15 tests): all pass. Tests prove daily limit deny when cumulative exceeded, daily limit allow when under cap, executeApproved rejects nonexistent/pending/expired, double-approval is blocked, raw XDR injection is rejected at approve/reject endpoints.
+- **API approval integration tests** (10 tests): all pass. Approve/reject lifecycle, 404 for unknown approval, 409 for double-approve and approve-then-reject, XDR injection rejected, no secret leakage in responses.
 
 ### Known Limitations
 
@@ -54,4 +55,4 @@
 
 ### Live Testnet Calls
 
-No live Stellar testnet calls were executed during Phase 2 implementation. All tests use deterministic mocks and in-process HTTP servers. The simulation and submission code paths call real Horizon APIs, but they are only reachable through the pipeline after policy ALLOW (which the test suite gates via DENY or requires_approval). A separate live testnet smoke test should be added when a funded testnet account with real XLM is available.
+No live Stellar testnet calls were executed during Phase 2 and Phase 3 implementation. All tests use deterministic mocks and in-process HTTP servers. The simulation and submission code paths call real Horizon APIs, but they are only reachable through the pipeline after policy ALLOW (which the test suite gates via DENY or requires_approval). A live testnet smoke test (`packages/stellar/test/live-smoke.ts`) is present but excluded from the default suite; run it manually with `npx tsx test/live-smoke.ts` when a funded testnet account is available.
