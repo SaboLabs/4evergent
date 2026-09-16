@@ -50,3 +50,24 @@ All decisions recorded via the ADR-lite convention. Each entry: **Status | Conte
 **Context:** Node.js 26 ESM requires explicit `.ts` extensions for local imports when running via tsx without a bundler.  
 **Decision:** All intra-project relative imports use `.ts` extensions. Test runner is `tsx --test`.  
 **Consequences:** Tests run without a separate build step. Production build uses `tsc` which rewrites extensions appropriately, or a bundler handles it.
+
+## ADR-008: Signer abstraction, never LLM-held keys
+
+**Status:** Accepted  
+**Context:** A server-held private key that the LLM can ask to sign anything defeats the purpose of the policy engine. The backend must NEVER give the LLM direct signing authority.  
+**Decision:** The `Signer` interface abstracts signing authority. The pipeline holds a `Signer` reference; callers never receive one. Initial implementation is `TestnetLocalSigner` (testnet-only, env-loaded, never exposed to LLM). Future implementations (user-wallet, permissioned-agent, hardware/KMS) plug in via the same interface.  
+**Consequences:** The LLM can propose intents but cannot sign. Signing is a capability, not a function the LLM can call. Production wallets are swappable without touching the pipeline.
+
+## ADR-009: Transaction pipeline as a single ordered gate chain
+
+**Status:** Accepted  
+**Context:** Multiple gates (validation → policy → authorization → construction → simulation → signing → submission) must run in order. Any shortcut (e.g., allowing callers to invoke the signer directly) creates a bypass.  
+**Decision:** `TransactionPipeline.execute()` is the ONLY public entry point. It runs each gate in sequence and stops at the first failure. No individual step is exposed as a public method that callers can chain arbitrarily.  
+**Consequences:** The gate order is structural, not conventional. Tests can prove that a policy DENY, a failed simulation, or an approval-required state cannot reach the signer.
+
+## ADR-010: Activity log records decisions, not secrets
+
+**Status:** Accepted  
+**Context:** The activity log must be auditable (shareable with operators, displayed in the UI) but must never leak key material.  
+**Decision:** `ActivityRecord` stores `policyDecision`, `authorizationStatus`, `simulationResult`, `txHash`, and `error`. It has NO field for private keys, seeds, or mnemonics. The store's `record()` method runs `assertNoSecrets()` before persisting.  
+**Consequences:** The activity log can be safely returned through the API and shown in the frontend without redaction.

@@ -1,12 +1,13 @@
 {
   "name": "@4evergent/api",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
-    "test": "tsx test/*.test.ts"
+    "test": "tsx test/*.test.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "@4evergent/shared": "workspace:*",

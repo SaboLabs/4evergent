@@ -5,12 +5,14 @@
 | Threat | Mitigation |
 |--------|-----------|
 | LLM produces unintended/malicious intent | Intent schema validation + deterministic policy engine deny-by-default |
-| Unauthorized transaction signing | Private keys never in source; signing isolated; simulation gate |
+| Unauthorized transaction signing | Private keys never in source; signing isolated behind `Signer` interface; simulation gate |
 | Asset theft via unexpected asset | Allowed-assets allowlist (deny by default) |
 | Funds sent to wrong/blacklisted destination | Allowed-destinations allowlist + destination format validation |
 | Excessive spending | Per-tx and daily spending limits; approval threshold |
 | Replay attacks | Stellar sequence numbers + timebounds on all transactions |
 | Policy bypass via malformed intent | Strict schema validation before policy evaluation |
+| Signer bypass via direct invocation | Pipeline is the only public entry point; signer is not exposed to callers |
+| Secret leakage through API responses | Signer interface has no key-returning methods; activity store asserts no secrets |
 | Frontend compromise exposes secrets | Frontend never receives private keys; all signing server-side |
 | Activity tampering | Activity records are append-only; hashed/checksummed |
 | Contract call injection | Contract calls disabled by default; explicit allowlist required |
@@ -19,8 +21,8 @@
 
 - **Never**: private keys in source code, environment example files, frontend code, logs, or tests.
 - **Server-side**: keys loaded from a secrets manager or KMS at runtime, never committed.
-- **Testnet**: ephemeral test keys generated via friendbot for development.
-- **Production planning**: HSM or MPC-based signing with policy-gated access.
+- **Testnet (development only)**: `TestnetLocalSigner` loads a secret key from the `STELLAR_TESTNET_SECRET_KEY` environment variable. It is testnet-only, never committed, never exposed through the API, and never logged.
+- **Production planning**: HSM or MPC-based signing with policy-gated access. The `Signer` interface is the seam — production implementations (UserWalletSigner, AgentPermissionSigner, HardwareSigner, KmsSigner) plug in without changing the pipeline.
 
 ## LLM Authority Boundaries
 
@@ -35,8 +37,30 @@ The LLM:
 - May NOT choose which rules to apply.
 - May NOT bypass policy evaluation.
 - May NOT sign transactions directly.
+- May NOT receive a reference to the Signer.
 
 The policy engine is a **pure function** with no dependency on the LLM or any external state except the explicit rule set.
+
+## Signer Authority Separation
+
+The `Signer` interface is the cryptographic boundary:
+
+```
+interface Signer {
+  getAccountId(): string;
+  getNetworkPassphrase(): string;
+  sign(transaction: Transaction): Promise<Transaction>;
+}
+```
+
+The pipeline holds a `Signer` reference at construction time. The LLM layer never receives one. The interface exposes only the public account ID and network passphrase — never private key material, seeds, or mnemonics.
+
+`TestnetLocalSigner` is **development infrastructure**, not the final wallet architecture. It exists for controlled testing against the Stellar testnet. Production implementations will include:
+- `UserWalletSigner` — user-custodied wallet signing (e.g., WalletConnect / xBull / Freighter)
+- `AgentPermissionSigner` — scoped on-chain signer with an on-chain policy contract
+- `HardwareSigner` / `KmsSigner` — hardware-backed or cloud-KMS-backed signing
+
+These are not yet implemented. The interface is designed so they can be added without changing the pipeline.
 
 ## Policy Enforcement
 
@@ -50,16 +74,38 @@ Rules are evaluated in order:
 
 A single deny short-circuits to `deny`. Amounts at or above the approval threshold return `requires_approval`, routing to a human review queue.
 
+## Transaction Pipeline Gate Order
+
+The pipeline runs each gate in sequence. A failure at any gate aborts the chain:
+
+```
+1. Intent validation  (IntentValidator)
+2. Policy evaluation (PolicyEngine)
+3. Authorization gate (allow + !requires_approval, or pre-approved)
+4. Transaction construction (StellarTransactionBuilder)
+5. Simulation (StellarSimulator)
+6. Signing (Signer — interface-abstracted)
+7. Submission (StellarSubmitter)
+8. Activity record
+```
+
+No individual step is exposed as a public method that callers can chain arbitrarily. `TransactionPipeline.execute()` is the only public entry point.
+
 ## Transaction Simulation
 
 Every intent that passes policy evaluation enters the **simulation gate**:
 
 1. Construct the transaction (unsigned) from the validated intent.
-2. Call `horizon simulate` (testnet).
-3. If simulation succeeds: record fee, warnings, operation count. Proceed to approval gate.
+2. Call the Stellar Horizon API to verify:
+   - The transaction envelope XDR is well-formed.
+   - The source account exists.
+   - The transaction sequence number is exactly the on-chain sequence + 1.
+   - The fee is >= the network base fee.
+   - The source account's XLM balance covers amount + fee + minimum reserve.
+3. If simulation succeeds: record fee, warnings, operation count. Proceed to signing.
 4. If simulation fails: record error, abort. Activity status = `failed`.
 
-Simulation is also the primary defense against gas-limit and balance issues surfacing at signing time.
+Simulation is a MANDATORY gate. A transaction that is not simulated, or whose simulation failed, MUST NOT be signed or submitted. There are no fake or cached simulation results.
 
 ## Replay Protection
 
@@ -87,6 +133,8 @@ Intent passes policy → Simulation succeeds → Decision = requires_approval?
 ```
 
 Approval state is recorded in the activity log. An approval is bound to a specific intent hash — it cannot be reused for a different intent.
+
+**LIMITATION (MVP):** There is no persistent approval store yet. The API returns a `requires_approval` status with a `pending_approval` authorization state, but there is no `POST /agents/:id/intents/:activityId/approve` endpoint. A later phase will add this.
 
 ## Emergency Disable Mechanism
 
@@ -118,7 +166,7 @@ All signing happens in the backend through a hardened, isolated path. The fronte
 Every action produces an `ActivityRecord`:
 
 ```
-agentId | intent | policyDecision | simulationResult | txHash | status | timestamp | error
+agentId | intent | policyDecision | authorizationStatus | simulationResult | txHash | status | timestamp | error
 ```
 
-Records are append-only. In the MVP they are stored in the database; future work moves critical fields on-chain via the AgentRegistry contract.
+Records are append-only. The store's `record()` method runs `assertNoSecrets()` before persisting — if any field contains a marker like "secret", "seed", "private_key", or "mnemonic", the write is rejected. In the MVP they are stored in the database; future work moves critical fields on-chain via the AgentRegistry contract.

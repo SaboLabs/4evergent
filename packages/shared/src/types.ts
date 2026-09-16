@@ -1,5 +1,16 @@
 export type Network = "testnet" | "mainnet";
 
+export interface PolicyRules {
+  maxTxAmount: Record<string, string>;
+  dailySpendingLimit: Record<string, string>;
+  allowedAssets: string[];
+  allowedDestinations: string[];
+  allowedContractIds: string[];
+  txTypeRestrictions: Record<string, boolean>;
+  approvalThreshold: string;
+  requireHumanApprovalForAmountAbove: string;
+}
+
 export interface Agent {
   id: string;
   displayName: string;
@@ -58,19 +69,55 @@ export interface PolicyDecision {
   intent: AgentIntent;
 }
 
-export type ActivityStatus = "pending" | "simulated" | "approved" | "rejected" | "submitted" | "failed";
+export type ActivityStatus =
+  | "pending"
+  | "rejected"
+  | "simulated"
+  | "requires_approval"
+  | "approved"
+  | "signed"
+  | "submitted"
+  | "failed";
+
+/**
+ * Authorization state for a transaction. The pipeline records this so that
+ * every downstream consumer (API, activity log, UI) can see exactly why a
+ * transaction was or was not allowed to reach the signer.
+ */
+export type AuthorizationStatus =
+  | "not_required"
+  | "pending_approval"
+  | "approved"
+  | "denied_by_policy"
+  | "denied_by_simulation";
 
 export interface ActivityRecord {
   id: string;
   agentId: string;
   intent: AgentIntent;
   policyDecision: PolicyDecision;
+  authorizationStatus: AuthorizationStatus | null;
   simulationResult: SimulationResult | null;
   txHash: string | null;
   status: ActivityStatus;
   error: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * Result of an executed transaction pipeline run. The pipeline is the ONLY
+ * code path that is allowed to produce this object, and only after every gate
+ * (validation, policy, simulation, authorization, signing) has passed.
+ */
+export interface PipelineResult {
+  activityId: string;
+  status: ActivityStatus;
+  policyDecision: PolicyDecision;
+  authorizationStatus: AuthorizationStatus;
+  simulationResult: SimulationResult | null;
+  txHash: string | null;
+  error: string | null;
 }
 
 export interface SimulationResult {
