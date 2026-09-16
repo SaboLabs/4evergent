@@ -11,6 +11,28 @@ export type ActivityStatus =
   | "submitted"
   | "failed";
 
+export type ScheduleStatus = "active" | "paused" | "disabled";
+
+export interface ScheduleRecord {
+  id: string;
+  agentId: string;
+  ownerId: string;
+  status: ScheduleStatus;
+  intent: {
+    type: string;
+    asset?: string;
+    amount?: string;
+    destination?: string;
+    reason?: string;
+  };
+  scheduleExpression: string;
+  timezone: string;
+  nextRunAt: string;
+  lastRunAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export type AuthorizationStatus =
   | "not_required"
   | "pending_approval"

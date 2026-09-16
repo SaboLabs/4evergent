@@ -26,6 +26,8 @@ import type {
   ActivityRecord,
   ApprovalRecord,
   SubmitPaymentIntent,
+  ScheduleRecord,
+  ScheduleStatus,
 } from './types';
 
 export interface IntentResponse {
@@ -93,4 +95,52 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(intent),
     }),
+
+  // ===== Schedules =====
+
+  listSchedules: (agentId: string, limit = 50) =>
+    request<{ agentId: string; schedules: ScheduleRecord[] }>(
+      `/agents/${encodeURIComponent(agentId)}/schedules?limit=${limit}`
+    ),
+
+  getSchedule: (agentId: string, scheduleId: string) =>
+    request<{ schedule: ScheduleRecord }>(
+      `/agents/${encodeURIComponent(agentId)}/schedules/${encodeURIComponent(scheduleId)}`
+    ),
+
+  createSchedule: (agentId: string, body: { intent: any; scheduleExpression: string; timezone?: string }) =>
+    request<{ schedule: ScheduleRecord }>(`/agents/${encodeURIComponent(agentId)}/schedules`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  updateSchedule: (agentId: string, scheduleId: string, body: { scheduleExpression?: string }) =>
+    request<{ schedule: ScheduleRecord }>(
+      `/agents/${encodeURIComponent(agentId)}/schedules/${encodeURIComponent(scheduleId)}`,
+      { method: 'PATCH', body: JSON.stringify(body) }
+    ),
+
+  deleteSchedule: (agentId: string, scheduleId: string) =>
+    request<{ deleted: boolean }>(
+      `/agents/${encodeURIComponent(agentId)}/schedules/${encodeURIComponent(scheduleId)}`,
+      { method: 'DELETE' }
+    ),
+
+  pauseSchedule: (agentId: string, scheduleId: string) =>
+    request<{ schedule: ScheduleRecord }>(
+      `/agents/${encodeURIComponent(agentId)}/schedules/${encodeURIComponent(scheduleId)}/pause`,
+      { method: 'POST', body: JSON.stringify({}) }
+    ),
+
+  resumeSchedule: (agentId: string, scheduleId: string) =>
+    request<{ schedule: ScheduleRecord }>(
+      `/agents/${encodeURIComponent(agentId)}/schedules/${encodeURIComponent(scheduleId)}/resume`,
+      { method: 'POST', body: JSON.stringify({}) }
+    ),
+
+  disableSchedule: (agentId: string, scheduleId: string) =>
+    request<{ schedule: ScheduleRecord }>(
+      `/agents/${encodeURIComponent(agentId)}/schedules/${encodeURIComponent(scheduleId)}/disable`,
+      { method: 'POST', body: JSON.stringify({}) }
+    ),
 };

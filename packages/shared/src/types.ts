@@ -13,6 +13,8 @@ export interface PolicyRules {
 
 export type AgentStatus = "active" | "paused" | "disabled";
 
+export type ScheduleStatus = "active" | "paused" | "disabled";
+
 export interface Agent {
   id: string;
   displayName: string;
@@ -39,6 +41,13 @@ export interface AuthorizationService {
   canApprove(ctx: RequestContext, approvalId: string): Promise<boolean>;
   canReject(ctx: RequestContext, approvalId: string): Promise<boolean>;
   canChangeAgentStatus(ctx: RequestContext, agentId: string): Promise<boolean>;
+  canAccessSchedule(ctx: RequestContext, scheduleId: string): Promise<boolean>;
+  canCreateSchedule(ctx: RequestContext, agentId: string): Promise<boolean>;
+  canUpdateSchedule(ctx: RequestContext, scheduleId: string): Promise<boolean>;
+  canDeleteSchedule(ctx: RequestContext, scheduleId: string): Promise<boolean>;
+  canPauseSchedule(ctx: RequestContext, scheduleId: string): Promise<boolean>;
+  canResumeSchedule(ctx: RequestContext, scheduleId: string): Promise<boolean>;
+  canDisableSchedule(ctx: RequestContext, scheduleId: string): Promise<boolean>;
 }
 
 export type IntentType = "payment" | "trustline" | "contract_call" | "account_settings";

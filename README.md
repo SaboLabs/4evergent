@@ -157,6 +157,31 @@ The MVP is validated against the testnet Horizon API. See [docs/testnet.md](docs
 
 No capability is considered complete without: schema validation, policy coverage, intent test, and a negative policy-engine test.
 
+## Agent Schedules
+
+Agents can have persistent schedules that automatically execute typed intents on a cron-like expression. Schedules are owner-scoped and go through the same policy/approval pipeline as manual intents.
+
+```bash
+# Create a schedule
+curl -X POST http://localhost:3000/agents/<agent-id>/schedules \
+  -H "Content-Type: application/json" \
+  -d '{
+    "intent": { "type": "payment", "asset": "XLM", "destination": "G...", "amount": "10", "reason": "daily payout" },
+    "scheduleExpression": "0 * * * *",
+    "timezone": "UTC"
+  }'
+
+# List schedules
+curl http://localhost:3000/agents/<agent-id>/schedules
+
+# Pause/resume/disable
+curl -X POST http://localhost:3000/agents/<agent-id>/schedules/<schedule-id>/pause
+curl -X POST http://localhost:3000/agents/<agent-id>/schedules/<schedule-id>/resume
+curl -X POST http://localhost:3000/agents/<agent-id>/schedules/<schedule-id>/disable
+```
+
+Schedules are stored in SQLite (when `dbPath` is configured) or in-memory. The scheduler polls every 60 seconds by default. Failed schedules do not stop the scheduler.
+
 ## Roadmap
 
 | Phase | Goal | Status |

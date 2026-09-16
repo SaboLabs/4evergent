@@ -4,6 +4,7 @@ import type {
   AuthorizationStatus,
   PolicyDecision,
   SimulationResult,
+  ScheduleStatus,
 } from "@4evergent/shared";
 
 /**
@@ -78,6 +79,8 @@ export interface ApprovalRecord {
   createdAt: string;
   updatedAt: string;
 }
+
+import type { ScheduleStore, ScheduleRecord } from "./schedule-types.js";
 
 /**
  * InMemoryActivityStore — process-local activity log.
@@ -310,10 +313,18 @@ export function validateApprovalTransition(
   return null;
 }
 
-export type { ActivityRecord, AgentIntent, AuthorizationStatus, PolicyDecision, SimulationResult };
+export type { ActivityRecord, AgentIntent, AuthorizationStatus, PolicyDecision, SimulationResult, ScheduleStatus };
 
 // SQLite-backed persistent stores
 export { SQLiteActivityStore, SQLiteApprovalStore } from "./sqlite-store.js";
+
+// Schedule stores + types
+export { InMemoryScheduleStore, SQLiteScheduleStore } from "./schedule-store.js";
+export type { ScheduleStore, ScheduleRecord } from "./schedule-types.js";
+
+// Schedule validation
+export { validateScheduleExpression, validateScheduleIntent } from "./schedule-validation.js";
+export type { ScheduleValidationResult } from "./schedule-validation.js";
 
 // Authorization service
 export { ResourceAuthorizationService } from "./authorization.js";

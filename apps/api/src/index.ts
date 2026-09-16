@@ -15,14 +15,17 @@ import type { Signer } from "@4evergent/stellar";
 import {
   InMemoryActivityStore,
   InMemoryApprovalStore,
+  InMemoryScheduleStore,
   SQLiteActivityStore,
   SQLiteApprovalStore,
+  SQLiteScheduleStore,
   assertNoSecrets,
   validateApprovalTransition,
   ResourceAuthorizationService,
   type AuthorizationContext,
   type ActivityStore,
   type ApprovalStore,
+  type ScheduleStore,
   type ApprovalRecord,
   type ApprovalStatus,
   type ActivityRecord,
@@ -64,6 +67,7 @@ export interface ServerOptions {
   policyRules?: Partial<PolicyRules>;
   activityStore?: ActivityStore;
   approvalStore?: ApprovalStore;
+  scheduleStore?: ScheduleStore;
   dbPath?: string;
   deferExecution?: boolean;
   requestContext?: RequestContext;
@@ -79,10 +83,14 @@ export function createApiServer(options: ServerOptions) {
   const approvals: ApprovalStore =
     options.approvalStore ??
     (options.dbPath ? new SQLiteApprovalStore(options.dbPath) : new InMemoryApprovalStore());
+  const schedules: ScheduleStore =
+    options.scheduleStore ??
+    (options.dbPath ? new SQLiteScheduleStore(options.dbPath) : new InMemoryScheduleStore());
 
   const defaultAuthzCtx: AuthorizationContext = {
     activityStore: store,
     approvalStore: approvals,
+    scheduleStore: schedules,
     agents: agents as Map<string, { id: string; ownerId: string }>,
   };
   const authorizationService: AuthorizationService =
@@ -131,6 +139,24 @@ export function createApiServer(options: ServerOptions) {
     }
     if (method === "PATCH" && /^\/agents\/[^/]+\/status$/.test(url)) {
       return handleUpdateAgentStatus(req, res);
+    }
+    if (method === "GET" && /^\/agents\/[^/]+\/schedules(\?.*)?$/.test(url)) {
+      return handleListSchedules(req, res);
+    }
+    if (method === "GET" && /^\/agents\/[^/]+\/schedules\/[^/]+$/.test(url)) {
+      return handleGetSchedule(req, res);
+    }
+    if (method === "POST" && /^\/agents\/[^/]+\/schedules$/.test(url)) {
+      return handleCreateSchedule(req, res);
+    }
+    if (method === "PATCH" && /^\/agents\/[^/]+\/schedules\/[^/]+$/.test(url)) {
+      return handleUpdateSchedule(req, res);
+    }
+    if (method === "DELETE" && /^\/agents\/[^/]+\/schedules\/[^/]+$/.test(url)) {
+      return handleDeleteSchedule(req, res);
+    }
+    if (method === "POST" && /^\/agents\/[^/]+\/schedules\/[^/]+\/(pause|resume|disable)$/.test(url)) {
+      return handleScheduleAction(req, res);
     }
     if (method === "GET" && /^\/approvals(\?.*)?$/.test(url)) {
       return handleListApprovals(req, res);
@@ -248,6 +274,155 @@ export function createApiServer(options: ServerOptions) {
     agent.status = status;
     agent.updatedAt = new Date().toISOString();
     return json(res, { id: agent.id, status: agent.status });
+  }
+
+  async function handleListSchedules(req: any, res: any) {
+    const urlObj = new URL(req.url ?? "", "http://localhost");
+    const match = urlObj.pathname.match(/^\/agents\/([^/]+)\/schedules$/);
+    const agentId = match?.[1];
+    if (!agentId) return json(res, { error: "invalid agent id in path" }, 400);
+    const allowed = await authorizationService.canAccessAgent(requestCtx, agentId);
+    if (!allowed) return json(res, { error: "not found" }, 404);
+    const limit = Math.max(1, Math.min(100, Number(urlObj.searchParams.get("limit") ?? 50) || 50));
+    const all = await schedules.listByAgent(agentId, limit);
+    return json(res, { agentId, schedules: all });
+  }
+
+  async function handleGetSchedule(req: any, res: any) {
+    const urlObj = new URL(req.url ?? "", "http://localhost");
+    const match = urlObj.pathname.match(/^\/agents\/([^/]+)\/schedules\/([^/]+)$/);
+    const agentId = match?.[1];
+    const scheduleId = match?.[2];
+    if (!agentId || !scheduleId) return json(res, { error: "invalid path" }, 400);
+    const allowed = await authorizationService.canAccessAgent(requestCtx, agentId);
+    if (!allowed) return json(res, { error: "not found" }, 404);
+    const schedule = await schedules.get(scheduleId);
+    if (!schedule || schedule.ownerId !== requestCtx.ownerId) {
+      return json(res, { error: "not found" }, 404);
+    }
+    return json(res, { schedule });
+  }
+
+  async function handleCreateSchedule(req: any, res: any) {
+    const urlObj = new URL(req.url ?? "", "http://localhost");
+    const match = urlObj.pathname.match(/^\/agents\/([^/]+)\/schedules$/);
+    const agentId = match?.[1];
+    if (!agentId) return json(res, { error: "invalid agent id in path" }, 400);
+    const canCreate = await authorizationService.canCreateSchedule(requestCtx, agentId);
+    if (!canCreate) return json(res, { error: "not found" }, 404);
+
+    let body: unknown;
+    try {
+      const text = await readBody(req);
+      body = text ? JSON.parse(text) : {};
+    } catch {
+      return json(res, { error: "invalid JSON body" }, 400);
+    }
+
+    const intent = (body as any)?.intent;
+    const scheduleExpression = (body as any)?.scheduleExpression;
+    const timezone = (body as any)?.timezone ?? "UTC";
+
+    const { validateScheduleExpression, validateScheduleIntent } = await import("@4evergent/database");
+
+    const intentValidation = validateScheduleIntent(intent);
+    if (!intentValidation.valid) {
+      return json(res, { error: intentValidation.error }, 400);
+    }
+
+    const exprValidation = validateScheduleExpression(scheduleExpression, timezone);
+    if (!exprValidation.valid) {
+      return json(res, { error: exprValidation.error }, 400);
+    }
+
+    const now = new Date().toISOString();
+    const schedule = await schedules.create({
+      id: crypto.randomUUID(),
+      agentId,
+      ownerId: requestCtx.ownerId,
+      status: "active",
+      intent,
+      scheduleExpression,
+      timezone,
+      nextRunAt: exprValidation.nextRunAt ?? now,
+      lastRunAt: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    return json(res, { schedule }, 201);
+  }
+
+  async function handleUpdateSchedule(req: any, res: any) {
+    const urlObj = new URL(req.url ?? "", "http://localhost");
+    const match = urlObj.pathname.match(/^\/agents\/([^/]+)\/schedules\/([^/]+)$/);
+    const agentId = match?.[1];
+    const scheduleId = match?.[2];
+    if (!agentId || !scheduleId) return json(res, { error: "invalid path" }, 400);
+    const canUpdate = await authorizationService.canUpdateSchedule(requestCtx, scheduleId);
+    if (!canUpdate) return json(res, { error: "not found" }, 404);
+
+    let body: unknown;
+    try {
+      const text = await readBody(req);
+      body = text ? JSON.parse(text) : {};
+    } catch {
+      return json(res, { error: "invalid JSON body" }, 400);
+    }
+
+    const schedule = await schedules.get(scheduleId);
+    if (!schedule) return json(res, { error: "not found" }, 404);
+
+    const patch: any = {};
+    if ((body as any)?.scheduleExpression !== undefined) {
+      const { validateScheduleExpression } = await import("@4evergent/database");
+      const result = validateScheduleExpression((body as any)?.scheduleExpression, schedule.timezone);
+      if (!result.valid) return json(res, { error: result.error }, 400);
+      patch.scheduleExpression = (body as any).scheduleExpression;
+      patch.nextRunAt = result.nextRunAt ?? schedule.nextRunAt;
+    }
+
+    const updated = await schedules.update(scheduleId, patch);
+    return json(res, { schedule: updated });
+  }
+
+  async function handleDeleteSchedule(req: any, res: any) {
+    const urlObj = new URL(req.url ?? "", "http://localhost");
+    const match = urlObj.pathname.match(/^\/agents\/([^/]+)\/schedules\/([^/]+)$/);
+    const agentId = match?.[1];
+    const scheduleId = match?.[2];
+    if (!agentId || !scheduleId) return json(res, { error: "invalid path" }, 400);
+    const canDelete = await authorizationService.canDeleteSchedule(requestCtx, scheduleId);
+    if (!canDelete) return json(res, { error: "not found" }, 404);
+    const deleted = await schedules.delete(scheduleId);
+    if (!deleted) return json(res, { error: "not found" }, 404);
+    return json(res, { deleted: true });
+  }
+
+  async function handleScheduleAction(req: any, res: any) {
+    const urlObj = new URL(req.url ?? "", "http://localhost");
+    const match = urlObj.pathname.match(/^\/agents\/([^/]+)\/schedules\/([^/]+)\/(pause|resume|disable)$/);
+    const agentId = match?.[1];
+    const scheduleId = match?.[2];
+    const action = match?.[3] as "pause" | "resume" | "disable";
+    if (!agentId || !scheduleId || !action) return json(res, { error: "invalid path" }, 400);
+
+    let allowed: boolean;
+    if (action === "pause") {
+      allowed = await authorizationService.canPauseSchedule(requestCtx, scheduleId);
+    } else if (action === "resume") {
+      allowed = await authorizationService.canResumeSchedule(requestCtx, scheduleId);
+    } else {
+      allowed = await authorizationService.canDisableSchedule(requestCtx, scheduleId);
+    }
+    if (!allowed) return json(res, { error: "not found" }, 404);
+
+    const schedule = await schedules.get(scheduleId);
+    if (!schedule) return json(res, { error: "not found" }, 404);
+
+    const status = action === "pause" ? "paused" : action === "resume" ? "active" : "disabled";
+    const updated = await schedules.update(scheduleId, { status });
+    return json(res, { schedule: updated });
   }
 
   async function handleIntent(req: any, res: any) {

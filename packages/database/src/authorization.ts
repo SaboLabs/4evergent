@@ -1,9 +1,10 @@
 import type { RequestContext, AuthorizationService } from '@4evergent/shared';
-import type { ActivityStore, ApprovalStore } from './index.js';
+import type { ActivityStore, ApprovalStore, ScheduleStore } from './index.js';
 
 export interface AuthorizationContext {
   activityStore: ActivityStore;
   approvalStore: ApprovalStore;
+  scheduleStore: ScheduleStore;
   agents: Map<string, { id: string; ownerId: string }>;
 }
 
@@ -41,5 +42,35 @@ export class ResourceAuthorizationService implements AuthorizationService {
 
   async canChangeAgentStatus(ctx: RequestContext, agentId: string): Promise<boolean> {
     return this.canAccessAgent(ctx, agentId);
+  }
+
+  async canAccessSchedule(ctx: RequestContext, scheduleId: string): Promise<boolean> {
+    const schedule = await this.ctx.scheduleStore.get(scheduleId);
+    if (!schedule) return false;
+    return schedule.ownerId === ctx.ownerId;
+  }
+
+  async canCreateSchedule(ctx: RequestContext, agentId: string): Promise<boolean> {
+    return this.canAccessAgent(ctx, agentId);
+  }
+
+  async canUpdateSchedule(ctx: RequestContext, scheduleId: string): Promise<boolean> {
+    return this.canAccessSchedule(ctx, scheduleId);
+  }
+
+  async canDeleteSchedule(ctx: RequestContext, scheduleId: string): Promise<boolean> {
+    return this.canAccessSchedule(ctx, scheduleId);
+  }
+
+  async canPauseSchedule(ctx: RequestContext, scheduleId: string): Promise<boolean> {
+    return this.canAccessSchedule(ctx, scheduleId);
+  }
+
+  async canResumeSchedule(ctx: RequestContext, scheduleId: string): Promise<boolean> {
+    return this.canAccessSchedule(ctx, scheduleId);
+  }
+
+  async canDisableSchedule(ctx: RequestContext, scheduleId: string): Promise<boolean> {
+    return this.canAccessSchedule(ctx, scheduleId);
   }
 }
