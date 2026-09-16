@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createApiServer } from "../src/index.js";
+import { Keypair } from "@stellar/stellar-sdk";
 import type { Signer } from "@4evergent/stellar";
 import type { PolicyRules } from "@4evergent/shared";
 import type { AddressInfo } from "node:net";
@@ -294,7 +295,7 @@ test("API records activity for approval-required intent", async () => {
     await post(baseUrl, "/agents/test-agent/intents", {
       type: "payment",
       asset: "XLM",
-      destination: "GDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      destination: Keypair.random().publicKey(),
       amount: "50",
       reason: "approval test",
     });

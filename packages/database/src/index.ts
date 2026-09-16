@@ -18,6 +18,58 @@ export interface ActivityStore {
   record(record: ActivityRecord): Promise<void>;
   get(id: string): Promise<ActivityRecord | null>;
   listByAgent(agentId: string, limit?: number): Promise<ActivityRecord[]>;
+  listByStatus(agentId: string, status: string, limit?: number): Promise<ActivityRecord[]>;
+  update(id: string, patch: Partial<ActivityRecord>): Promise<ActivityRecord | null>;
+}
+
+/**
+ * ApprovalStore — persistence interface for transaction approval records.
+ *
+ * An ApprovalRecord tracks the lifecycle of a transaction that requires
+ * human/authoritative approval before it can be signed and submitted.
+ *
+ * State machine:
+ *   PENDING_APPROVAL → APPROVED → EXECUTING → SUBMITTED/CONFIRMED/FAILED
+ *   PENDING_APPROVAL → REJECTED
+ *   PENDING_APPROVAL → EXPIRED
+ *
+ * Approval records NEVER store private keys, transaction blobs, or XDR.
+ */
+export interface ApprovalStore {
+  record(record: ApprovalRecord): Promise<void>;
+  get(id: string): Promise<ApprovalRecord | null>;
+  listByAgent(agentId: string, limit?: number): Promise<ApprovalRecord[]>;
+  listByStatus(agentId: string, status: string, limit?: number): Promise<ApprovalRecord[]>;
+  update(id: string, patch: Partial<ApprovalRecord>): Promise<ApprovalRecord | null>;
+}
+
+export type ApprovalStatus =
+  | "pending_approval"
+  | "approved"
+  | "rejected"
+  | "expired"
+  | "executing"
+  | "submitted"
+  | "confirmed"
+  | "failed";
+
+export interface ApprovalRecord {
+  id: string;
+  activityId: string;
+  agentId: string;
+  intent: AgentIntent;
+  policyDecision: PolicyDecision;
+  status: ApprovalStatus;
+  requestedAt: string;
+  approvedAt: string | null;
+  rejectedAt: string | null;
+  expiredAt: string | null;
+  approver: string | null;
+  expiresAt: string | null;
+  txHash: string | null;
+  error: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 /**
@@ -45,6 +97,60 @@ export class InMemoryActivityStore implements ActivityStore {
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
       .slice(0, limit);
   }
+
+  async listByStatus(agentId: string, status: string, limit = 50): Promise<ActivityRecord[]> {
+    return [...this.records.values()]
+      .filter((r) => r.agentId === agentId && r.status === status)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .slice(0, limit);
+  }
+
+  async update(id: string, patch: Partial<ActivityRecord>): Promise<ActivityRecord | null> {
+    const existing = this.records.get(id);
+    if (!existing) return null;
+    const updated = { ...existing, ...patch, updatedAt: new Date().toISOString() };
+    this.records.set(id, updated);
+    return updated;
+  }
+}
+
+/**
+ * InMemoryApprovalStore — process-local approval log.
+ *
+ * LIMITATION: not durable. Records are lost when the process exits.
+ */
+export class InMemoryApprovalStore implements ApprovalStore {
+  private records = new Map<string, ApprovalRecord>();
+
+  async record(record: ApprovalRecord): Promise<void> {
+    this.records.set(record.id, record);
+  }
+
+  async get(id: string): Promise<ApprovalRecord | null> {
+    return this.records.get(id) ?? null;
+  }
+
+  async listByAgent(agentId: string, limit = 50): Promise<ApprovalRecord[]> {
+    return [...this.records.values()]
+      .filter((r) => r.agentId === agentId)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .slice(0, limit);
+  }
+
+  async listByStatus(agentId: string, status: string, limit = 50): Promise<ApprovalRecord[]> {
+    return [...this.records.values()]
+      .filter((r) => r.agentId === agentId && r.status === status)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .slice(0, limit);
+  }
+
+  async update(id: string, patch: Partial<ApprovalRecord>): Promise<ApprovalRecord | null> {
+    const existing = this.records.get(id);
+    if (!existing) return null;
+    const updated = { ...existing, ...patch, updatedAt: new Date().toISOString() };
+    this.records.set(id, updated);
+    return updated;
+  }
 }
 
 /**
@@ -52,13 +158,13 @@ export class InMemoryActivityStore implements ActivityStore {
  * Fails loudly if secret material ever enters a record, so it can never be
  * persisted silently.
  */
-export function assertNoSecrets(record: ActivityRecord): void {
+export function assertNoSecrets(record: ActivityRecord | ApprovalRecord): void {
   const blob = JSON.stringify(record).toLowerCase();
-  const forbidden = ["secret", "seed", "private_key", "mnemonic", " Keypair"];
+  const forbidden = ["secret", "seed", "private_key", "mnemonic", "keypair"];
   for (const term of forbidden) {
     if (blob.includes(term.toLowerCase())) {
       throw new Error(
-        `ActivityStore: refusing to persist record — contains forbidden key material marker '${term}'`
+        `Store: refusing to persist record — contains forbidden key material marker '${term}'`
       );
     }
   }
@@ -88,6 +194,37 @@ export function createActivity(
   };
 }
 
+/**
+ * Creates a new ApprovalRecord in PENDING_APPROVAL state.
+ */
+export function createApproval(
+  activityId: string,
+  agentId: string,
+  intent: AgentIntent,
+  policyDecision: PolicyDecision,
+  expiresAt?: string | null
+): ApprovalRecord {
+  const now = new Date().toISOString();
+  return {
+    id: crypto.randomUUID(),
+    activityId,
+    agentId,
+    intent,
+    policyDecision,
+    status: "pending_approval",
+    requestedAt: now,
+    approvedAt: null,
+    rejectedAt: null,
+    expiredAt: null,
+    approver: null,
+    expiresAt: expiresAt ?? null,
+    txHash: null,
+    error: null,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
 export function updateActivity(
   record: ActivityRecord,
   patch: Partial<ActivityRecord>
@@ -95,4 +232,38 @@ export function updateActivity(
   return { ...record, ...patch, updatedAt: new Date().toISOString() };
 }
 
+export function updateApproval(
+  record: ApprovalRecord,
+  patch: Partial<ApprovalRecord>
+): ApprovalRecord {
+  return { ...record, ...patch, updatedAt: new Date().toISOString() };
+}
+
+/**
+ * Validates state transitions for approval records.
+ * Returns null if valid, error message if invalid.
+ */
+export function validateApprovalTransition(
+  current: ApprovalStatus,
+  next: ApprovalStatus
+): string | null {
+  const allowed: Record<ApprovalStatus, ApprovalStatus[]> = {
+    pending_approval: ["approved", "rejected", "expired", "executing"],
+    approved: ["executing", "submitted", "failed"],
+    rejected: [],
+    expired: [],
+    executing: ["submitted", "confirmed", "failed"],
+    submitted: ["confirmed", "failed"],
+    confirmed: [],
+    failed: [],
+  };
+  if (!allowed[current].includes(next)) {
+    return `Invalid transition: ${current} -> ${next}`;
+  }
+  return null;
+}
+
 export type { ActivityRecord, AgentIntent, AuthorizationStatus, PolicyDecision, SimulationResult };
+
+// SQLite-backed persistent stores
+export { SQLiteActivityStore, SQLiteApprovalStore } from "./sqlite-store.js";

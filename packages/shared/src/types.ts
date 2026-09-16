@@ -72,7 +72,6 @@ export interface PolicyDecision {
 export type ActivityStatus =
   | "pending"
   | "rejected"
-  | "simulated"
   | "requires_approval"
   | "approved"
   | "signed"

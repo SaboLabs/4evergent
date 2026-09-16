@@ -14,7 +14,7 @@
 | Signer bypass via direct invocation | Pipeline is the only public entry point; signer is not exposed to callers |
 | Secret leakage through API responses | Signer interface has no key-returning methods; activity store asserts no secrets |
 | Frontend compromise exposes secrets | Frontend never receives private keys; all signing server-side |
-| Activity tampering | Activity records are append-only; hashed/checksummed |
+| Daily limit race | Daily spending limit uses read-then-write across the activity store; two near-simultaneous intents can both pass the check before either record lands. Not safe for concurrent writers yet |
 | Contract call injection | Contract calls disabled by default; explicit allowlist required |
 
 ## Key Management
@@ -134,7 +134,9 @@ Intent passes policy → Simulation succeeds → Decision = requires_approval?
 
 Approval state is recorded in the activity log. An approval is bound to a specific intent hash — it cannot be reused for a different intent.
 
-**LIMITATION (MVP):** There is no persistent approval store yet. The API returns a `requires_approval` status with a `pending_approval` authorization state, but there is no `POST /agents/:id/intents/:activityId/approve` endpoint. A later phase will add this.
+**LIMITATION (Phase 3):** Approval state is persisted in an `ApprovalStore` (SQLite or in-memory). The approve/reject endpoints are stateless HTTP handlers that transition records. Cross-agent approval isolation is NOT yet enforced — any party holding an `approvalId` can approve/reject it. A future phase will add agent-scoped access control on approvals.
+
+Async fire-and-forget execution (after approve) uses `setImmediate`. If the process exits or the execution throws, the approval remains in `executing`/`approved` state with no retry or dead-letter queue. A future phase will add an execution queue with retry + dead-letter semantics.
 
 ## Emergency Disable Mechanism
 

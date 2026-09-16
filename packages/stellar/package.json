@@ -20,6 +20,7 @@
     "@4evergent/shared": "workspace:*",
     "@4evergent/agent-core": "workspace:*",
     "@4evergent/policy": "workspace:*",
+    "@4evergent/database": "workspace:*",
     "@stellar/stellar-sdk": "^13.0.0"
   },
   "devDependencies": {

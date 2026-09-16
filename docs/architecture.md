@@ -71,3 +71,10 @@ All decisions recorded via the ADR-lite convention. Each entry: **Status | Conte
 **Context:** The activity log must be auditable (shareable with operators, displayed in the UI) but must never leak key material.  
 **Decision:** `ActivityRecord` stores `policyDecision`, `authorizationStatus`, `simulationResult`, `txHash`, and `error`. It has NO field for private keys, seeds, or mnemonics. The store's `record()` method runs `assertNoSecrets()` before persisting.  
 **Consequences:** The activity log can be safely returned through the API and shown in the frontend without redaction.
+
+## ADR-011: SQLite-backed persistence via node:sqlite
+
+**Status:** Accepted
+**Context:** Phase 3 needs durable activity and approval storage without introducing an external database dependency.
+**Decision:** `SQLiteActivityStore` and `SQLiteApprovalStore` in `packages/database/src/sqlite-store.ts` use Node.js built-in `node:sqlite` (`DatabaseSync`). Schema is versioned in `_meta` (version 1). The default API server auto-selects SQLite when `dbPath` is provided; otherwise falls back to in-memory stores. No external `better-sqlite3` or server process.
+**Consequences:** Single dependency (Node.js stdlib), file-backed persistence with cross-restart durability tested via reopen simulation. `initSchema()` idempotent. Partial unique index `idx_approvals_activity_one` enforces one PENDING_APPROVAL per activity.

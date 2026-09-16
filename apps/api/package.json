@@ -1,6 +1,6 @@
 {
   "name": "@4evergent/api",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -14,7 +14,8 @@
     "@4evergent/agent-core": "workspace:*",
     "@4evergent/policy": "workspace:*",
     "@4evergent/stellar": "workspace:*",
-    "@4evergent/database": "workspace:*"
+    "@4evergent/database": "workspace:*",
+    "@stellar/stellar-sdk": "^13.0.0"
   },
   "devDependencies": {
     "tsx": "^4.19.2",
