@@ -8,13 +8,15 @@ export type { PipelineOutcome, PipelineExecuteInput };
  * Result of a schedule execution. When the pipeline is not reached (e.g. source
  * account load failure), we synthesize a minimal rejected outcome.
  */
-export type ScheduleExecutionResult = PipelineOutcome | {
-  status: "rejected";
-  message: string;
-  intent: AgentIntent;
-  policyDecision: PolicyDecision;
-  simulationResult: null;
+export type ScheduleExecutionResult = {
+  status: string;
+  message?: string;
+  intent?: AgentIntent;
+  policyDecision?: PolicyDecision | null;
+  simulationResult?: unknown | null;
+  txHash?: string | null;
   activityId?: string;
+  approvalId?: string;
 };
 
 export interface ScheduleExecutionDeps {

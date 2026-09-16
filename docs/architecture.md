@@ -78,3 +78,27 @@ All decisions recorded via the ADR-lite convention. Each entry: **Status | Conte
 **Context:** Phase 3 needs durable activity and approval storage without introducing an external database dependency.
 **Decision:** `SQLiteActivityStore` and `SQLiteApprovalStore` in `packages/database/src/sqlite-store.ts` use Node.js built-in `node:sqlite` (`DatabaseSync`). Schema is versioned in `_meta` (version 1). The default API server auto-selects SQLite when `dbPath` is provided; otherwise falls back to in-memory stores. No external `better-sqlite3` or server process.
 **Consequences:** Single dependency (Node.js stdlib), file-backed persistence with cross-restart durability tested via reopen simulation. `initSchema()` idempotent. Partial unique index `idx_approvals_activity_one` enforces one PENDING_APPROVAL per activity.
+
+## ADR-012: Persistent Execution Queue for Retry & Dead-Letter
+
+**Status:** Accepted | Phase 9 | 2026-09-16
+
+**Context:** Phase 8 used `setImmediate` for fire-and-forget execution after approval. If the process exits or execution throws, the approval stays in `approved`/`executing` state with no retry or recovery. Scheduled intents also had no persistent execution record.
+
+**Decision:** Introduce `ExecutionStore` (InMemory + SQLite via `node:sqlite`) and `ExecutionQueue` that:
+- Persists execution records with full state: `queued → executing → submitted → confirmed → failed → dead_letter`
+- Retries transient failures (network/Horizon/submission errors) with exponential backoff (baseDelayMs \* 2^attempt, capped at maxDelayMs)
+- Moves permanent failures (policy deny, invalid intent, validation error) directly to `dead_letter`
+- Bounded retries: max 3 (configurable) after which execution moves to `dead_letter`
+- Duplicate safety: claims via status check (executing records are skipped), suitable for single-process SQLite architecture
+- Owner-scoped: all execution records are tied to `ownerId`, endpoints enforce owner isolation via `getForOwner/listByOwner`
+- Crash recovery: records in `failed` state with `nextRetryAt` are picked up on restart via `listDue`
+- Approval boundary: execution records carry `approvalId`; the queue does NOT bypass approval — it only executes after approval has been recorded
+
+**Consequences:**
+- Execution state survives process restarts (when SQLite store is configured)
+- Transient failures are automatically retried with backoff
+- Permanent failures are visible in `dead_letter` for manual intervention
+- Scheduler (Phase 8) and approval flow both enqueue through the same queue
+- Exactly-once is not guaranteed (single-process SQLite provides at-most-once deduplication via status claims); document as known limitation
+- Records in `executing` at crash time are stuck — a recovery scan on startup can re-queue them (deferred to future phase)

@@ -14,13 +14,18 @@ import { TransactionPipeline } from "@4evergent/stellar";
 import type { Signer } from "@4evergent/stellar";
 import { AgentScheduler } from "./scheduler.js";
 import { ScheduleExecutionService } from "./schedule-execution.js";
+import { ExecutionQueue } from "./execution-queue.js";
+import type { ExecutionRecord } from "@4evergent/database";
+import type { ScheduleExecutionResult } from "./schedule-execution.js";
 import {
   InMemoryActivityStore,
   InMemoryApprovalStore,
   InMemoryScheduleStore,
+  InMemoryExecutionStore,
   SQLiteActivityStore,
   SQLiteApprovalStore,
   SQLiteScheduleStore,
+  SQLiteExecutionStore,
   assertNoSecrets,
   validateApprovalTransition,
   ResourceAuthorizationService,
@@ -28,6 +33,7 @@ import {
   type ActivityStore,
   type ApprovalStore,
   type ScheduleStore,
+  type ExecutionStore,
   type ApprovalRecord,
   type ApprovalStatus,
   type ActivityRecord,
@@ -81,6 +87,15 @@ export interface ServerOptions {
     /** Inject a custom scheduler (e.g. for testing). */
     instance?: AgentScheduler;
   };
+  /** Execution store — defaults to SQLite if dbPath provided, else in-memory. */
+  executionStore?: ExecutionStore;
+  /** Enable the persistent execution queue (opt-in). */
+  executionQueue?: {
+    enabled?: boolean;
+    intervalMs?: number;
+    concurrency?: number;
+    instance?: ExecutionQueue;
+  };
 }
 
 const DEFAULT_OWNER = "dev-owner";
@@ -117,6 +132,46 @@ export function createApiServer(options: ServerOptions) {
   const policy = new PolicyEngine(options.policyRules, store as any);
   const adapter = new StellarAdapter(options.horizonUrl);
 
+  // --- Execution queue setup ---
+  const executionStore: ExecutionStore =
+    options.executionStore ??
+    (options.dbPath ? new SQLiteExecutionStore(options.dbPath) : new InMemoryExecutionStore());
+
+  let executionQueue: ExecutionQueue | null = null;
+  if (options.executionQueue?.enabled) {
+    const getSourceAccount = async () => {
+      const account = await adapter.getAccount(options.signer.getAccountId());
+      return {
+        accountId: () => account.address,
+        sequenceNumber: () => account.sequence,
+        incrementSequenceNumber: () => {},
+      };
+    };
+
+    const pipelineExecutor = async (record: ExecutionRecord) => {
+      const sourceAccount = await getSourceAccount();
+      const outcome = await pipeline.execute({ intent: record.intent, sourceAccount });
+      return {
+        record,
+        success: outcome.status === "submitted",
+        status: outcome.status,
+        error: outcome.message,
+        errorClass: outcome.status === "rejected" ? "permanent" as const : "transient" as const,
+        txHash: (outcome as { txHash?: string }).txHash,
+      };
+    };
+
+    executionQueue =
+      options.executionQueue.instance ??
+      new ExecutionQueue(executionStore, pipelineExecutor, getSourceAccount, {
+        intervalMs: options.executionQueue.intervalMs,
+        concurrency: options.executionQueue.concurrency,
+      });
+
+    executionQueue.start();
+    console.log("[execution-queue] started, interval:", options.executionQueue.intervalMs ?? 10_000, "ms");
+  }
+
   // --- Scheduler setup ---
   // The scheduler executes due schedules via the SAME pipeline as manual intents.
   // It is opt-in: only starts if options.scheduler.enabled is true.
@@ -149,6 +204,46 @@ export function createApiServer(options: ServerOptions) {
         schedules,
         agentStatusStore,
         async (schedule) => {
+          // If execution queue is enabled, enqueue; otherwise fall back to
+          // direct ScheduleExecutionService invocation.
+          if (executionQueue) {
+            const now = new Date().toISOString();
+            const executionRecord: ExecutionRecord = {
+              id: crypto.randomUUID(),
+              ownerId: schedule.ownerId,
+              agentId: schedule.agentId,
+              approvalId: null,
+              activityId: null,
+              intent: schedule.intent,
+              status: "queued",
+              policyDecision: null,
+              simulationResult: null,
+              txHash: null,
+              error: null,
+              attempt: 0,
+              nextRetryAt: null,
+              startedAt: null,
+              completedAt: null,
+              errorClass: null,
+              createdAt: now,
+              updatedAt: now,
+            };
+            void executionQueue.enqueue(executionRecord);
+            return {
+              status: "submitted",
+              message: "schedule enqueued for execution",
+              policyDecision: {
+                result: "allow",
+                reason: "schedule enqueued",
+                rule: "scheduler",
+                intent: schedule.intent,
+              },
+              simulationResult: null,
+              txHash: null as unknown as string,
+              activityId: undefined,
+              approvalId: undefined,
+            } as ScheduleExecutionResult;
+          }
           return scheduleExecution.executeSchedule(schedule);
         },
         options.scheduler.intervalMs !== undefined
@@ -212,6 +307,15 @@ export function createApiServer(options: ServerOptions) {
     }
     if (method === "GET" && /^\/approvals(\?.*)?$/.test(url)) {
       return handleListApprovals(req, res);
+    }
+    if (method === "GET" && /^\/agents\/[^/]+\/executions(\?.*)?$/.test(url)) {
+      return handleAgentExecutions(req, res);
+    }
+    if (method === "GET" && /^\/executions\/[^/]+$/.test(url)) {
+      return handleExecutionDetail(req, res);
+    }
+    if (method === "GET" && /^\/agent-queue(\?.*)?$/.test(url)) {
+      return handleQueueStatus(req, res);
     }
     json(res, { error: "not found" }, 404);
   });
@@ -477,6 +581,43 @@ export function createApiServer(options: ServerOptions) {
     return json(res, { schedule: updated });
   }
 
+  async function handleAgentExecutions(req: any, res: any) {
+    const urlObj = new URL(req.url ?? "", "http://localhost");
+    const match = urlObj.pathname.match(/^\/agents\/([^/]+)\/executions$/);
+    const agentId = match?.[1];
+    if (!agentId) return json(res, { error: "invalid agent id in path" }, 400);
+    const allowed = await authorizationService.canAccessAgent(requestCtx, agentId);
+    if (!allowed) return json(res, { error: "not found" }, 404);
+    const limit = Math.max(1, Math.min(100, Number(urlObj.searchParams.get("limit") ?? 50) || 50));
+    const all = await executionStore.listByAgent(agentId, limit);
+    return json(res, { agentId, executions: all });
+  }
+
+  async function handleExecutionDetail(req: any, res: any) {
+    const urlObj = new URL(req.url ?? "", "http://localhost");
+    const match = urlObj.pathname.match(/^\/executions\/([^/]+)$/);
+    const executionId = match?.[1];
+    if (!executionId) return json(res, { error: "invalid execution id in path" }, 400);
+    const execution = await executionStore.getForOwner(executionId, requestCtx.ownerId);
+    if (!execution) return json(res, { error: "not found" }, 404);
+    return json(res, { execution });
+  }
+
+  async function handleQueueStatus(_req: any, res: any) {
+    if (!executionQueue) {
+      return json(res, { error: "execution queue not enabled" }, 404);
+    }
+    const all = await executionStore.listByOwner(requestCtx.ownerId, 200);
+    const byStatus: Record<string, number> = {};
+    for (const e of all) {
+      byStatus[e.status] = (byStatus[e.status] ?? 0) + 1;
+    }
+    return json(res, {
+      running: executionQueue.isRunning(),
+      byStatus,
+    });
+  }
+
   async function handleIntent(req: any, res: any) {
     const agentId = extractAgentId(req.url);
     if (!agentId) return json(res, { error: "invalid agent id in path" }, 400);
@@ -617,15 +758,41 @@ export function createApiServer(options: ServerOptions) {
 
     await approvals.update(approvalId, { status: "approved", approvedAt: new Date().toISOString(), approver: approver ?? null });
 
-    // Fire-and-forget execution. The HTTP response returns immediately;
-    // the approval status will transition to submitted/failed asynchronously.
-    if (!options.deferExecution) {
+    // Enqueue for execution via the persistent execution queue.
+    // If the queue is not enabled, fall back to setImmediate (Phase 8 behavior).
+    if (options.deferExecution) {
+      // execution deferred intentionally — no action taken here
+    } else if (executionQueue) {
+      const now = new Date().toISOString();
+      const executionRecord: ExecutionRecord = {
+        id: crypto.randomUUID(),
+        ownerId: approval.ownerId,
+        agentId: approval.agentId,
+        approvalId,
+        activityId: approval.activityId,
+        intent: approval.intent,
+        status: "queued",
+        policyDecision: approval.policyDecision,
+        simulationResult: null,
+        txHash: null,
+        error: null,
+        attempt: 0,
+        nextRetryAt: null,
+        startedAt: null,
+        completedAt: null,
+        errorClass: null,
+        createdAt: now,
+        updatedAt: now,
+      };
+      void executionQueue.enqueue(executionRecord);
+    } else {
+      // Fallback: Phase 8 fire-and-forget behavior
       setImmediate(() => {
         pipeline.executeApproved(approvalId, approver).catch(() => {});
       });
     }
 
-    return json(res, toApprovalResponse(approvalId, approval.activityId, "approved", "approval accepted; transaction will execute asynchronously"), 200);
+    return json(res, toApprovalResponse(approvalId, approval.activityId, "approved", "approval accepted; transaction queued for execution"), 200);
 
   }
 
@@ -697,7 +864,9 @@ export function createApiServer(options: ServerOptions) {
     registerAgent: (agent: Agent) => agents.set(agent.id, agent),
     store,
     approvals,
+    executionStore,
     scheduler,
+    executionQueue,
   };
 }
 

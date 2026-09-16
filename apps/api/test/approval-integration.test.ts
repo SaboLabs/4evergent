@@ -137,7 +137,7 @@ test("approval: approve valid approval → 200 approved (async execution)", asyn
     const approveRes = await post(baseUrl, `/approvals/${intentRes.body.approvalId}/approve`, { approver: "tester" });
     assert.equal(approveRes.status, 200);
     assert.equal(approveRes.body.status, "approved");
-    assert.ok(approveRes.body.message.includes("asynchronously"));
+    assert.ok(approveRes.body.message.includes("queued"));
 
     // Verify approval persisted as approved
     const approval = await approvals.get(intentRes.body.approvalId);

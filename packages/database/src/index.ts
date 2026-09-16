@@ -326,6 +326,21 @@ export type { ScheduleStore, ScheduleRecord } from "./schedule-types.js";
 export { validateScheduleExpression, validateScheduleIntent } from "./schedule-validation.js";
 export type { ScheduleValidationResult } from "./schedule-validation.js";
 
+// Execution queue stores + types
+export { InMemoryExecutionStore, SQLiteExecutionStore } from "./execution-store.js";
+export type { ExecutionStore, ExecutionRecord, ExecutionStatus } from "./execution-types.js";
+
+// Execution retry policy
+export {
+  classifyPipelineOutcome,
+  classifyError,
+  shouldRetry,
+  computeNextRetryAt,
+  DEFAULT_RETRY_POLICY,
+} from "./execution-policy.js";
+export type { ErrorClass } from "./execution-policy.js";
+export type { RetryPolicy } from "./execution-policy.js";
+
 // Authorization service
 export { ResourceAuthorizationService } from "./authorization.js";
 export type { AuthorizationContext } from "./authorization.js";

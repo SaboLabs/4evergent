@@ -1,0 +1,278 @@
+import { DatabaseSync } from "node:sqlite";
+import type { ExecutionStore, ExecutionRecord } from "./execution-types.js";
+
+const MAX_LIMIT = 200;
+
+/**
+ * InMemoryExecutionStore — process-local execution queue.
+ *
+ * LIMITATION: not durable. Records are lost when the process exits. This is
+ * acceptable for MVP/development. Use SQLiteExecutionStore for production.
+ */
+export class InMemoryExecutionStore implements ExecutionStore {
+  private records = new Map<string, ExecutionRecord>();
+
+  async record(record: ExecutionRecord): Promise<void> {
+    this.records.set(record.id, record);
+  }
+
+  async get(id: string): Promise<ExecutionRecord | null> {
+    return this.records.get(id) ?? null;
+  }
+
+  async getForOwner(id: string, ownerId: string): Promise<ExecutionRecord | null> {
+    const rec = this.records.get(id);
+    return rec?.ownerId === ownerId ? rec : null;
+  }
+
+  async listDue(before: string, limit = MAX_LIMIT): Promise<ExecutionRecord[]> {
+    return [...this.records.values()]
+      .filter(
+        (r) =>
+          (r.status === "queued" || r.status === "failed") &&
+          (!r.nextRetryAt || r.nextRetryAt <= before)
+      )
+      .sort((a, b) => (a.nextRetryAt ?? "").localeCompare(b.nextRetryAt ?? ""))
+      .slice(0, Math.max(1, Math.min(limit, MAX_LIMIT)));
+  }
+
+  async listByOwner(ownerId: string, limit = MAX_LIMIT): Promise<ExecutionRecord[]> {
+    return [...this.records.values()]
+      .filter((r) => r.ownerId === ownerId)
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+      .slice(0, Math.max(1, Math.min(limit, MAX_LIMIT)));
+  }
+
+  async listByAgent(agentId: string, limit = MAX_LIMIT): Promise<ExecutionRecord[]> {
+    return [...this.records.values()]
+      .filter((r) => r.agentId === agentId)
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+      .slice(0, Math.max(1, Math.min(limit, MAX_LIMIT)));
+  }
+
+  async update(id: string, patch: Partial<ExecutionRecord>): Promise<ExecutionRecord | null> {
+    const existing = this.records.get(id);
+    if (!existing) return null;
+    const updated: ExecutionRecord = { ...existing, ...patch, id: existing.id };
+    this.records.set(id, updated);
+    return updated;
+  }
+
+  async delete(id: string): Promise<boolean> {
+    return this.records.delete(id);
+  }
+}
+
+interface ExecutionRow {
+  id: string;
+  owner_id: string;
+  agent_id: string;
+  approval_id: string | null;
+  activity_id: string | null;
+  intent_json: string;
+  status: string;
+  policy_decision_json: string | null;
+  simulation_result_json: string | null;
+  tx_hash: string | null;
+  error: string | null;
+  attempt: number;
+  next_retry_at: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  error_class: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * SQLiteExecutionStore — persistent ExecutionStore backed by SQLite.
+ *
+ * Uses Node.js built-in node:sqlite (Node 22+). Schema versioned in _meta
+ * (version 1). initSchema() is idempotent. Records survive process restart.
+ */
+export class SQLiteExecutionStore implements ExecutionStore {
+  private db: DatabaseSync;
+
+  constructor(dbPath: string) {
+    this.db = new DatabaseSync(dbPath);
+    this.initSchema();
+  }
+
+  private initSchema(): void {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS _meta (key TEXT PRIMARY KEY, value TEXT);
+      INSERT OR IGNORE INTO _meta (key, value) VALUES ('schema_version', '1');
+
+      CREATE TABLE IF NOT EXISTS executions (
+        id TEXT PRIMARY KEY,
+        owner_id TEXT NOT NULL,
+        agent_id TEXT NOT NULL,
+        approval_id TEXT,
+        activity_id TEXT,
+        intent_json TEXT NOT NULL,
+        status TEXT NOT NULL,
+        policy_decision_json TEXT,
+        simulation_result_json TEXT,
+        tx_hash TEXT,
+        error TEXT,
+        attempt INTEGER NOT NULL DEFAULT 0,
+        next_retry_at TEXT,
+        started_at TEXT,
+        completed_at TEXT,
+        error_class TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_executions_owner ON executions(owner_id);
+      CREATE INDEX IF NOT EXISTS idx_executions_agent ON executions(agent_id);
+      CREATE INDEX IF NOT EXISTS idx_executions_status ON executions(status);
+      CREATE INDEX IF NOT EXISTS idx_executions_next_retry ON executions(next_retry_at);
+    `);
+  }
+
+  async record(record: ExecutionRecord): Promise<void> {
+    this.db
+      .prepare(
+        `INSERT INTO executions
+         (id, owner_id, agent_id, approval_id, activity_id, intent_json, status,
+          policy_decision_json, simulation_result_json, tx_hash, error, attempt,
+          next_retry_at, started_at, completed_at, error_class, created_at, updated_at)
+         VALUES
+         (@id, @owner_id, @agent_id, @approval_id, @activity_id, @intent_json, @status,
+          @policy_decision_json, @simulation_result_json, @tx_hash, @error, @attempt,
+          @next_retry_at, @started_at, @completed_at, @error_class, @created_at, @updated_at)`
+      )
+      .run({
+        id: record.id,
+        owner_id: record.ownerId,
+        agent_id: record.agentId,
+        approval_id: record.approvalId,
+        activity_id: record.activityId,
+        intent_json: JSON.stringify(record.intent),
+        status: record.status,
+        policy_decision_json: record.policyDecision ? JSON.stringify(record.policyDecision) : null,
+        simulation_result_json: record.simulationResult ? JSON.stringify(record.simulationResult) : null,
+        tx_hash: record.txHash,
+        error: record.error,
+        attempt: record.attempt,
+        next_retry_at: record.nextRetryAt,
+        started_at: record.startedAt,
+        completed_at: record.completedAt,
+        error_class: record.errorClass,
+        created_at: record.createdAt,
+        updated_at: record.updatedAt,
+      });
+  }
+
+  async get(id: string): Promise<ExecutionRecord | null> {
+    const row = this.db.prepare("SELECT * FROM executions WHERE id = ?").get(id) as unknown as ExecutionRow | undefined;
+    return row ? rowToExecutionRecord(row) : null;
+  }
+
+  async getForOwner(id: string, ownerId: string): Promise<ExecutionRecord | null> {
+    const row = this.db
+      .prepare("SELECT * FROM executions WHERE id = ? AND owner_id = ?")
+      .get(id, ownerId) as unknown as ExecutionRow | undefined;
+    return row ? rowToExecutionRecord(row) : null;
+  }
+
+  async listDue(before: string, limit = MAX_LIMIT): Promise<ExecutionRecord[]> {
+    const safeLimit = Math.max(1, Math.min(limit, MAX_LIMIT));
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM executions
+         WHERE (status = 'queued' OR status = 'failed')
+           AND (next_retry_at IS NULL OR next_retry_at <= ?)
+         ORDER BY next_retry_at ASC
+         LIMIT ?`
+      )
+      .all(before, safeLimit) as unknown as ExecutionRow[];
+    return rows.map(rowToExecutionRecord);
+  }
+
+  async listByOwner(ownerId: string, limit = MAX_LIMIT): Promise<ExecutionRecord[]> {
+    const safeLimit = Math.max(1, Math.min(limit, MAX_LIMIT));
+    const rows = this.db
+      .prepare("SELECT * FROM executions WHERE owner_id = ? ORDER BY updated_at DESC LIMIT ?")
+      .all(ownerId, safeLimit) as unknown as ExecutionRow[];
+    return rows.map(rowToExecutionRecord);
+  }
+
+  async listByAgent(agentId: string, limit = MAX_LIMIT): Promise<ExecutionRecord[]> {
+    const safeLimit = Math.max(1, Math.min(limit, MAX_LIMIT));
+    const rows = this.db
+      .prepare("SELECT * FROM executions WHERE agent_id = ? ORDER BY updated_at DESC LIMIT ?")
+      .all(agentId, safeLimit) as unknown as ExecutionRow[];
+    return rows.map(rowToExecutionRecord);
+  }
+
+  async update(id: string, patch: Partial<ExecutionRecord>): Promise<ExecutionRecord | null> {
+    const existing = await this.get(id);
+    if (!existing) return null;
+    const updated: ExecutionRecord = { ...existing, ...patch, id: existing.id };
+    this.db
+      .prepare(
+        `UPDATE executions SET
+           owner_id = @owner_id, agent_id = @agent_id, approval_id = @approval_id,
+           activity_id = @activity_id, intent_json = @intent_json, status = @status,
+           policy_decision_json = @policy_decision_json, simulation_result_json = @simulation_result_json,
+           tx_hash = @tx_hash, error = @error, attempt = @attempt, next_retry_at = @next_retry_at,
+           started_at = @started_at, completed_at = @completed_at, error_class = @error_class,
+           updated_at = @updated_at
+         WHERE id = @id`
+      )
+      .run({
+        id: updated.id,
+        owner_id: updated.ownerId,
+        agent_id: updated.agentId,
+        approval_id: updated.approvalId,
+        activity_id: updated.activityId,
+        intent_json: JSON.stringify(updated.intent),
+        status: updated.status,
+        policy_decision_json: updated.policyDecision ? JSON.stringify(updated.policyDecision) : null,
+        simulation_result_json: updated.simulationResult ? JSON.stringify(updated.simulationResult) : null,
+        tx_hash: updated.txHash,
+        error: updated.error,
+        attempt: updated.attempt,
+        next_retry_at: updated.nextRetryAt,
+        started_at: updated.startedAt,
+        completed_at: updated.completedAt,
+        error_class: updated.errorClass,
+        updated_at: updated.updatedAt,
+      });
+    return updated;
+  }
+
+  async delete(id: string): Promise<boolean> {
+    const result = this.db.prepare("DELETE FROM executions WHERE id = ?").run(id);
+    return result.changes > 0;
+  }
+
+  close(): void {
+    this.db.close();
+  }
+}
+
+function rowToExecutionRecord(r: ExecutionRow): ExecutionRecord {
+  return {
+    id: r.id,
+    ownerId: r.owner_id,
+    agentId: r.agent_id,
+    approvalId: r.approval_id,
+    activityId: r.activity_id,
+    intent: JSON.parse(r.intent_json),
+    status: r.status as ExecutionRecord["status"],
+    policyDecision: r.policy_decision_json ? JSON.parse(r.policy_decision_json) : null,
+    simulationResult: r.simulation_result_json ? JSON.parse(r.simulation_result_json) : null,
+    txHash: r.tx_hash,
+    error: r.error,
+    attempt: r.attempt,
+    nextRetryAt: r.next_retry_at,
+    startedAt: r.started_at,
+    completedAt: r.completed_at,
+    errorClass: r.error_class,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  };
+}
