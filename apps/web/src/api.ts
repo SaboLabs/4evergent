@@ -96,6 +96,12 @@ export const api = {
       body: JSON.stringify(intent),
     }),
 
+  createAgent: (body: { displayName: string; description?: string; capabilities?: string[]; stellarAddress?: string }) =>
+    request<{ agent: AgentRecord }>('/agents', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
   // ===== Schedules =====
 
   listSchedules: (agentId: string, limit = 50) =>

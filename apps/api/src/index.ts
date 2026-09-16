@@ -23,10 +23,12 @@ import {
   InMemoryApprovalStore,
   InMemoryScheduleStore,
   InMemoryExecutionStore,
+  InMemoryAgentStore,
   SQLiteActivityStore,
   SQLiteApprovalStore,
   SQLiteScheduleStore,
   SQLiteExecutionStore,
+  SQLiteAgentStore,
   assertNoSecrets,
   validateApprovalTransition,
   ResourceAuthorizationService,
@@ -35,6 +37,7 @@ import {
   type ApprovalStore,
   type ScheduleStore,
   type ExecutionStore,
+  type AgentStore,
   type ApprovalRecord,
   type ApprovalStatus,
   type ActivityRecord,
@@ -90,6 +93,8 @@ export interface ServerOptions {
   };
   /** Execution store — defaults to SQLite if dbPath provided, else in-memory. */
   executionStore?: ExecutionStore;
+  /** Agent store — defaults to SQLite if dbPath provided, else in-memory. */
+  agentStore?: AgentStore;
   /** Enable the persistent execution queue (opt-in). */
   executionQueue?: {
     enabled?: boolean;
@@ -111,6 +116,9 @@ export async function createApiServer(options: ServerOptions) {
   const schedules: ScheduleStore =
     options.scheduleStore ??
     (options.dbPath ? new SQLiteScheduleStore(options.dbPath) : new InMemoryScheduleStore());
+  const agentStore: AgentStore =
+    options.agentStore ??
+    (options.dbPath ? new SQLiteAgentStore(options.dbPath) : new InMemoryAgentStore());
 
   const defaultAuthzCtx: AuthorizationContext = {
     activityStore: store,
@@ -277,6 +285,9 @@ export async function createApiServer(options: ServerOptions) {
     const url = req.url ?? "";
     const method = req.method ?? "GET";
 
+    if (method === "POST" && url === "/agents") {
+      return handleCreateAgent(req, res);
+    }
     if (method === "POST" && /^\/agents\/[^/]+\/intents$/.test(url)) {
       return handleIntent(req, res);
     }
@@ -339,9 +350,8 @@ export async function createApiServer(options: ServerOptions) {
   });
 
   async function handleListAgents(_req: any, res: any) {
-    const all = [...agents.values()];
-    const filtered = all.filter((a) => a.ownerId === requestCtx.ownerId);
-    const agentList = filtered.map((a) => ({
+    const all = await agentStore.listByOwner(requestCtx.ownerId);
+    const agentList = all.map((a) => ({
       id: a.id,
       displayName: a.displayName,
       description: a.description,
@@ -352,6 +362,56 @@ export async function createApiServer(options: ServerOptions) {
       createdAt: a.createdAt,
     }));
     return json(res, { agents: agentList });
+  }
+
+  async function handleCreateAgent(req: any, res: any) {
+    let body: unknown;
+    try {
+      const text = await readBody(req);
+      body = text ? JSON.parse(text) : {};
+    } catch {
+      return json(res, { error: "invalid JSON body" }, 400);
+    }
+
+    const b = body as Record<string, unknown>;
+    const displayName = b.displayName;
+    if (typeof displayName !== "string" || displayName.trim().length === 0) {
+      return json(res, { error: "displayName is required" }, 400);
+    }
+    if (displayName.trim().length > 100) {
+      return json(res, { error: "displayName must be 100 characters or fewer" }, 400);
+    }
+
+    const description = typeof b.description === "string" ? b.description : "";
+
+    let capabilities: string[] = [];
+    if (b.capabilities !== undefined) {
+      if (!Array.isArray(b.capabilities) || !b.capabilities.every((c) => typeof c === "string")) {
+        return json(res, { error: "capabilities must be an array of strings" }, 400);
+      }
+      capabilities = b.capabilities as string[];
+    }
+
+    let stellarAddress = "";
+    if (b.stellarAddress !== undefined) {
+      if (typeof b.stellarAddress !== "string") {
+        return json(res, { error: "stellarAddress must be a string" }, 400);
+      }
+      stellarAddress = b.stellarAddress;
+    }
+
+    const agent = await agentStore.create({
+      displayName: displayName.trim(),
+      description,
+      capabilities,
+      ownerId: requestCtx.ownerId,
+      stellarAddress,
+    });
+
+    // Backward compatibility: keep in-memory map in sync
+    agents.set(agent.id, agent);
+
+    return json(res, { agent }, 201);
   }
 
   async function handleAgentActivity(req: any, res: any) {
@@ -383,7 +443,7 @@ export async function createApiServer(options: ServerOptions) {
     if (!agentId) return json(res, { error: "invalid agent id in path" }, 400);
     const allowed = await authorizationService.canAccessAgent(requestCtx, agentId);
     if (!allowed) return json(res, { error: "not found" }, 404);
-    const agent = agents.get(agentId);
+    const agent = await agentStore.getForOwner(agentId, requestCtx.ownerId);
     if (!agent) return json(res, { error: "not found" }, 404);
     return json(res, {
       id: agent.id,
@@ -443,10 +503,8 @@ export async function createApiServer(options: ServerOptions) {
     if (!["active", "paused", "disabled"].includes(status)) {
       return json(res, { error: "invalid status" }, 400);
     }
-    const agent = agents.get(agentId);
+    const agent = await agentStore.update(agentId, { status: status as any });
     if (!agent) return json(res, { error: "not found" }, 404);
-    agent.status = status;
-    agent.updatedAt = new Date().toISOString();
     return json(res, { id: agent.id, status: agent.status });
   }
 
@@ -879,10 +937,22 @@ export async function createApiServer(options: ServerOptions) {
       server.closeAllConnections?.();
       server.close(() => resolve());
     }),
-    registerAgent: (agent: Agent) => agents.set(agent.id, agent),
+    registerAgent: (agent: Agent) => {
+      agents.set(agent.id, agent);
+      void agentStore.create({
+        id: agent.id,
+        displayName: agent.displayName,
+        description: agent.description,
+        capabilities: agent.capabilities,
+        ownerId: agent.ownerId,
+        stellarAddress: agent.stellarAddress,
+        status: agent.status,
+      }).catch(() => {});
+    },
     store,
     approvals,
     executionStore,
+    agentStore,
     scheduler,
     executionQueue,
     recoveryService,

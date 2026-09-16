@@ -15,13 +15,19 @@ export type AgentStatus = "active" | "paused" | "disabled";
 
 export type ScheduleStatus = "active" | "paused" | "disabled";
 
-export interface Agent {
-  id: string;
+export interface CreateAgentInput {
   displayName: string;
-  description: string;
+  description?: string;
+  capabilities?: string[];
   ownerId: string;
-  stellarAddress: string;
-  capabilities: string[];
+  stellarAddress?: string;
+}
+
+export type CreateAgentRequest = CreateAgentInput;
+
+export interface Agent extends CreateAgentInput {
+  id: string;
+  ownerId: string;
   status: AgentStatus;
   createdAt: string;
   updatedAt: string;

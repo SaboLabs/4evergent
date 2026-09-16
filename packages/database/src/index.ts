@@ -326,6 +326,10 @@ export type { ScheduleStore, ScheduleRecord } from "./schedule-types.js";
 export { validateScheduleExpression, validateScheduleIntent } from "./schedule-validation.js";
 export type { ScheduleValidationResult } from "./schedule-validation.js";
 
+// Agent stores + types
+export { InMemoryAgentStore, SQLiteAgentStore } from "./agent-store.js";
+export type { AgentStore, CreateAgentInput } from "./agent-types.js";
+
 // Execution queue stores + types
 export { InMemoryExecutionStore, SQLiteExecutionStore } from "./execution-store.js";
 export type { ExecutionStore, ExecutionRecord, ExecutionStatus } from "./execution-types.js";
