@@ -38,4 +38,8 @@ export class ResourceAuthorizationService implements AuthorizationService {
   async canReject(ctx: RequestContext, approvalId: string): Promise<boolean> {
     return this.canAccessApproval(ctx, approvalId);
   }
+
+  async canChangeAgentStatus(ctx: RequestContext, agentId: string): Promise<boolean> {
+    return this.canAccessAgent(ctx, agentId);
+  }
 }

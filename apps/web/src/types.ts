@@ -28,6 +28,8 @@ export type ApprovalStatus =
   | "confirmed"
   | "failed";
 
+export type AgentStatus = "active" | "paused" | "disabled";
+
 export type IntentType = "payment" | "trustline" | "contract_call" | "account_settings";
 
 export interface AgentIntent {
@@ -37,8 +39,6 @@ export interface AgentIntent {
   destination?: string;
   reason?: string;
   memo?: string;
-  // Other intent fields are present but stripped by the API for sensitive fields.
-  // We only model what the frontend needs to display.
   [key: string]: unknown;
 }
 
@@ -61,16 +61,19 @@ export interface AgentRecord {
   id: string;
   displayName: string;
   description: string;
-  owner: string;
+  ownerId: string;
   stellarAddress: string;
   capabilities: string[];
+  status: AgentStatus;
   active: boolean;
   createdAt: string;
+  updatedAt: string;
 }
 
 export interface ActivityRecord {
   id: string;
   agentId: string;
+  ownerId: string;
   intent: AgentIntent;
   policyDecision: PolicyDecision;
   authorizationStatus: AuthorizationStatus | null;
@@ -86,6 +89,7 @@ export interface ApprovalRecord {
   id: string;
   activityId: string;
   agentId: string;
+  ownerId: string;
   intent: AgentIntent;
   policyDecision: PolicyDecision;
   status: ApprovalStatus;

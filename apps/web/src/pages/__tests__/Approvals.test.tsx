@@ -102,4 +102,3 @@ describe('Approvals', () => {
     expect(mockApi.reject).not.toHaveBeenCalled();
   });
 });
-

@@ -1,11 +1,12 @@
 import { useState } from 'react';
 import Overview from './pages/Overview';
 import Agents from './pages/Agents';
+import AgentDetail from './pages/AgentDetail';
 import Activity from './pages/Activity';
 import Approvals from './pages/Approvals';
 import Submit from './pages/Submit';
 
-type Tab = 'overview' | 'agents' | 'activity' | 'approvals' | 'submit';
+type Tab = 'overview' | 'agents' | 'agent-detail' | 'activity' | 'approvals' | 'submit';
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'overview', label: 'Overview' },
@@ -17,6 +18,12 @@ const TABS: { id: Tab; label: string }[] = [
 
 export default function App() {
   const [tab, setTab] = useState<Tab>('overview');
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+
+  const handleAgentClick = (agentId: string) => {
+    setSelectedAgentId(agentId);
+    setTab('agent-detail');
+  };
 
   return (
     <div className="layout">
@@ -41,7 +48,8 @@ export default function App() {
         </nav>
         <main className="content">
           {tab === 'overview' && <Overview />}
-          {tab === 'agents' && <Agents />}
+          {tab === 'agents' && <Agents onAgentClick={handleAgentClick} />}
+          {tab === 'agent-detail' && selectedAgentId && <AgentDetail agentId={selectedAgentId} />}
           {tab === 'activity' && <Activity />}
           {tab === 'approvals' && <Approvals />}
           {tab === 'submit' && <Submit />}

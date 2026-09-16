@@ -33,6 +33,7 @@ const TEST_AGENT = {
   ownerId: "test",
   stellarAddress: "GDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
   capabilities: [],
+  status: "active",
   createdAt: new Date().toISOString(),
   updatedAt: new Date().toISOString(),
   active: true,

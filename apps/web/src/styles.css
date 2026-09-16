@@ -182,6 +182,7 @@ code {
 
 .badge-ok { background: rgba(0,255,136,0.1); color: var(--ok); }
 .badge-err { background: rgba(255,68,102,0.1); color: var(--err); }
+.badge-warn { background: rgba(255,170,0,0.1); color: var(--warn); }
 .badge-info { background: rgba(0,212,255,0.1); color: var(--accent); }
 
 button {

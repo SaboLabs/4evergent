@@ -11,6 +11,8 @@ export interface PolicyRules {
   requireHumanApprovalForAmountAbove: string;
 }
 
+export type AgentStatus = "active" | "paused" | "disabled";
+
 export interface Agent {
   id: string;
   displayName: string;
@@ -18,6 +20,7 @@ export interface Agent {
   ownerId: string;
   stellarAddress: string;
   capabilities: string[];
+  status: AgentStatus;
   createdAt: string;
   updatedAt: string;
   active: boolean;
@@ -35,6 +38,7 @@ export interface AuthorizationService {
   canSubmitIntent(ctx: RequestContext, agentId: string): Promise<boolean>;
   canApprove(ctx: RequestContext, approvalId: string): Promise<boolean>;
   canReject(ctx: RequestContext, approvalId: string): Promise<boolean>;
+  canChangeAgentStatus(ctx: RequestContext, agentId: string): Promise<boolean>;
 }
 
 export type IntentType = "payment" | "trustline" | "contract_call" | "account_settings";

@@ -50,10 +50,26 @@ export const api = {
 
   listAgents: () => request<{ agents: AgentRecord[] }>('/agents'),
 
+  getAgent: (agentId: string) => request<AgentRecord>(`/agents/${encodeURIComponent(agentId)}`),
+
   agentActivity: (agentId: string, limit = 50) =>
     request<{ agentId: string; activity: ActivityRecord[] }>(
       `/agents/${encodeURIComponent(agentId)}/activity?limit=${limit}`
     ),
+
+  activityDetail: (agentId: string, activityId: string) =>
+    request<{ activity: ActivityRecord }>(`/agents/${encodeURIComponent(agentId)}/activity/${encodeURIComponent(activityId)}`),
+
+  agentApprovals: (agentId: string, statusFilter?: string) => {
+    const qs = statusFilter ? `?status=${encodeURIComponent(statusFilter)}` : '';
+    return request<{ agentId: string; approvals: ApprovalRecord[] }>(`/agents/${encodeURIComponent(agentId)}/approvals${qs}`);
+  },
+
+  updateAgentStatus: (agentId: string, status: string) =>
+    request<{ id: string; status: string }>(`/agents/${encodeURIComponent(agentId)}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status }),
+    }),
 
   listApprovals: (statusFilter?: string) => {
     const qs = statusFilter ? `?status=${encodeURIComponent(statusFilter)}` : '';

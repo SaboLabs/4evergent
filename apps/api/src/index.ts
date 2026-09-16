@@ -117,8 +117,20 @@ export function createApiServer(options: ServerOptions) {
     if (method === "GET" && url === "/agents") {
       return handleListAgents(req, res);
     }
+    if (method === "GET" && /^\/agents\/[^/]+$/.test(url)) {
+      return handleGetAgent(req, res);
+    }
     if (method === "GET" && /^\/agents\/[^/]+\/activity(\?.*)?$/.test(url)) {
       return handleAgentActivity(req, res);
+    }
+    if (method === "GET" && /^\/agents\/[^/]+\/activity\/[^/]+$/.test(url)) {
+      return handleActivityDetail(req, res);
+    }
+    if (method === "GET" && /^\/agents\/[^/]+\/approvals(\?.*)?$/.test(url)) {
+      return handleAgentApprovals(req, res);
+    }
+    if (method === "PATCH" && /^\/agents\/[^/]+\/status$/.test(url)) {
+      return handleUpdateAgentStatus(req, res);
     }
     if (method === "GET" && /^\/approvals(\?.*)?$/.test(url)) {
       return handleListApprovals(req, res);
@@ -162,6 +174,80 @@ export function createApiServer(options: ServerOptions) {
       ? all.filter((r) => r.status === statusFilter).slice(0, 50)
       : all.slice(0, 50);
     return json(res, { approvals: filtered });
+  }
+
+  async function handleGetAgent(req: any, res: any) {
+    const urlObj = new URL(req.url ?? "", "http://localhost");
+    const match = urlObj.pathname.match(/^\/agents\/([^/]+)$/);
+    const agentId = match?.[1];
+    if (!agentId) return json(res, { error: "invalid agent id in path" }, 400);
+    const allowed = await authorizationService.canAccessAgent(requestCtx, agentId);
+    if (!allowed) return json(res, { error: "not found" }, 404);
+    const agent = agents.get(agentId);
+    if (!agent) return json(res, { error: "not found" }, 404);
+    return json(res, {
+      id: agent.id,
+      displayName: agent.displayName,
+      description: agent.description,
+      ownerId: agent.ownerId,
+      stellarAddress: agent.stellarAddress,
+      capabilities: agent.capabilities,
+      status: agent.status,
+      active: agent.active,
+      createdAt: agent.createdAt,
+      updatedAt: agent.updatedAt,
+    });
+  }
+
+  async function handleActivityDetail(req: any, res: any) {
+    const urlObj = new URL(req.url ?? "", "http://localhost");
+    const match = urlObj.pathname.match(/^\/agents\/([^/]+)\/activity\/([^/]+)$/);
+    const agentId = match?.[1];
+    const activityId = match?.[2];
+    if (!agentId || !activityId) return json(res, { error: "invalid path" }, 400);
+    const allowed = await authorizationService.canAccessAgent(requestCtx, agentId);
+    if (!allowed) return json(res, { error: "not found" }, 404);
+    const activity = await store.getForOwner(activityId, requestCtx.ownerId);
+    if (!activity) return json(res, { error: "not found" }, 404);
+    return json(res, { activity });
+  }
+
+  async function handleAgentApprovals(req: any, res: any) {
+    const urlObj = new URL(req.url ?? "", "http://localhost");
+    const match = urlObj.pathname.match(/^\/agents\/([^/]+)\/approvals$/);
+    const agentId = match?.[1];
+    if (!agentId) return json(res, { error: "invalid agent id in path" }, 400);
+    const allowed = await authorizationService.canAccessAgent(requestCtx, agentId);
+    if (!allowed) return json(res, { error: "not found" }, 404);
+    const statusFilter = urlObj.searchParams.get("status") ?? undefined;
+    const all = await approvals.listByAgent(agentId, 200);
+    const filtered = statusFilter ? all.filter((r) => r.status === statusFilter).slice(0, 50) : all.slice(0, 50);
+    return json(res, { agentId, approvals: filtered });
+  }
+
+  async function handleUpdateAgentStatus(req: any, res: any) {
+    const urlObj = new URL(req.url ?? "", "http://localhost");
+    const match = urlObj.pathname.match(/^\/agents\/([^/]+)\/status$/);
+    const agentId = match?.[1];
+    if (!agentId) return json(res, { error: "invalid agent id in path" }, 400);
+    const canChange = await authorizationService.canChangeAgentStatus(requestCtx, agentId);
+    if (!canChange) return json(res, { error: "not found" }, 404);
+    let body: unknown;
+    try {
+      const text = await readBody(req);
+      body = text ? JSON.parse(text) : {};
+    } catch {
+      return json(res, { error: "invalid JSON body" }, 400);
+    }
+    const status = (body as any)?.status;
+    if (!["active", "paused", "disabled"].includes(status)) {
+      return json(res, { error: "invalid status" }, 400);
+    }
+    const agent = agents.get(agentId);
+    if (!agent) return json(res, { error: "not found" }, 404);
+    agent.status = status;
+    agent.updatedAt = new Date().toISOString();
+    return json(res, { id: agent.id, status: agent.status });
   }
 
   async function handleIntent(req: any, res: any) {

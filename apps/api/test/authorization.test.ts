@@ -35,7 +35,7 @@ const BASE_RULES: Partial<PolicyRules> = {
   requireHumanApprovalForAmountAbove: "10",
 };
 
-function makeAgent(id: string, ownerId: string) {
+function makeAgent(id: string, ownerId: string, status = "active") {
   return {
     id,
     displayName: `Agent ${id}`,
@@ -43,6 +43,7 @@ function makeAgent(id: string, ownerId: string) {
     ownerId,
     stellarAddress: "GDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
     capabilities: ["payment"],
+    status,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     active: true,
