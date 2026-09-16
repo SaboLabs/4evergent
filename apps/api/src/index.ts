@@ -12,6 +12,8 @@ import { PolicyEngine } from "@4evergent/policy";
 import { StellarAdapter } from "@4evergent/agent-core";
 import { TransactionPipeline } from "@4evergent/stellar";
 import type { Signer } from "@4evergent/stellar";
+import { AgentScheduler } from "./scheduler.js";
+import { ScheduleExecutionService } from "./schedule-execution.js";
 import {
   InMemoryActivityStore,
   InMemoryApprovalStore,
@@ -72,6 +74,13 @@ export interface ServerOptions {
   deferExecution?: boolean;
   requestContext?: RequestContext;
   authorizationService?: AuthorizationService;
+  /** Enable the background scheduler to execute due schedules. */
+  scheduler?: {
+    enabled?: boolean;
+    intervalMs?: number;
+    /** Inject a custom scheduler (e.g. for testing). */
+    instance?: AgentScheduler;
+  };
 }
 
 const DEFAULT_OWNER = "dev-owner";
@@ -107,6 +116,49 @@ export function createApiServer(options: ServerOptions) {
   });
   const policy = new PolicyEngine(options.policyRules, store as any);
   const adapter = new StellarAdapter(options.horizonUrl);
+
+  // --- Scheduler setup ---
+  // The scheduler executes due schedules via the SAME pipeline as manual intents.
+  // It is opt-in: only starts if options.scheduler.enabled is true.
+  let scheduler: AgentScheduler | null = null;
+  if (options.scheduler?.enabled) {
+    const scheduleExecution = new ScheduleExecutionService({
+      activityStore: store,
+      approvalStore: approvals,
+      getSourceAccount: async () => {
+        const account = await adapter.getAccount(options.signer.getAccountId());
+        return {
+          accountId: () => account.address,
+          sequenceNumber: () => account.sequence,
+          incrementSequenceNumber: () => {},
+        };
+      },
+      pipelineExecutor: (input) => pipeline.execute(input) as any,
+    });
+
+    const agentStatusStore = {
+      get: async (id: string) => {
+        const agent = agents.get(id);
+        return agent ? { id: agent.id, status: agent.status, ownerId: agent.ownerId } : null;
+      },
+    };
+
+    scheduler =
+      options.scheduler.instance ??
+      new AgentScheduler(
+        schedules,
+        agentStatusStore,
+        async (schedule) => {
+          return scheduleExecution.executeSchedule(schedule);
+        },
+        options.scheduler.intervalMs !== undefined
+          ? { intervalMs: options.scheduler.intervalMs }
+          : {}
+      );
+
+    scheduler.start();
+    console.log("[scheduler] started, interval:", options.scheduler.intervalMs ?? 60_000, "ms");
+  }
 
   const server = createServer(async (req, res) => {
     const url = req.url ?? "";
@@ -633,6 +685,10 @@ export function createApiServer(options: ServerOptions) {
     server,
     listen: (port: number) => new Promise<void>((resolve) => server.listen(port, "127.0.0.1", resolve)),
     close: () => new Promise<void>((resolve) => {
+      if (scheduler) {
+        scheduler.stop();
+        console.log("[scheduler] stopped");
+      }
       // Abort lingering keep-alive connections so the server actually shuts
       // down (Node's http close() waits for active sockets otherwise).
       server.closeAllConnections?.();
@@ -641,6 +697,7 @@ export function createApiServer(options: ServerOptions) {
     registerAgent: (agent: Agent) => agents.set(agent.id, agent),
     store,
     approvals,
+    scheduler,
   };
 }
 

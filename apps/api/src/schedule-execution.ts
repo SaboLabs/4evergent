@@ -1,27 +1,31 @@
-import type { AgentIntent } from "@4evergent/shared";
-import type { ScheduleRecord, ScheduleStore, ActivityStore, ApprovalStore } from "@4evergent/database";
+import type { AgentIntent, PolicyDecision } from "@4evergent/shared";
+import type { ScheduleRecord, ActivityStore, ApprovalStore } from "@4evergent/database";
+import type { PipelineOutcome, PipelineExecuteInput } from "@4evergent/stellar";
 
-interface PipelineOutcome {
-  status: string;
-  activityId?: string;
-  approvalId?: string;
-  message?: string;
-}
+export type { PipelineOutcome, PipelineExecuteInput };
 
-interface PipelineExecuteInput {
+/**
+ * Result of a schedule execution. When the pipeline is not reached (e.g. source
+ * account load failure), we synthesize a minimal rejected outcome.
+ */
+export type ScheduleExecutionResult = PipelineOutcome | {
+  status: "rejected";
+  message: string;
   intent: AgentIntent;
-  sourceAccount: {
-    agentId: string;
-    ownerId: string;
+  policyDecision: PolicyDecision;
+  simulationResult: null;
+  activityId?: string;
+};
+
+export interface ScheduleExecutionDeps {
+  activityStore: ActivityStore;
+  approvalStore: ApprovalStore;
+  /** Resolve a StellarAccount-like object for the signer account. */
+  getSourceAccount: () => Promise<{
     accountId: () => string;
     sequenceNumber: () => string;
     incrementSequenceNumber: () => void;
-  };
-}
-
-interface ScheduleExecutionDeps {
-  activityStore: ActivityStore;
-  approvalStore: ApprovalStore;
+  }>;
   pipelineExecutor: (input: PipelineExecuteInput) => Promise<PipelineOutcome>;
   now?: () => Date;
 }
@@ -38,27 +42,35 @@ export class ScheduleExecutionService {
     this.now = deps.now ?? (() => new Date());
   }
 
-  async executeSchedule(schedule: ScheduleRecord): Promise<PipelineOutcome> {
-    // 1. Reload to ensure status hasn't changed since the scheduler picked it up
-    // (InMemoryScheduleStore.get is a Map lookup; SQLite does a SELECT)
-    const current = await this.deps.activityStore.get(schedule.id).catch(() => null);
-    // Note: schedule store isn't accessible here, so we rely on the caller.
-    // The scheduler already filtered for active schedules.
-
-    // 2. Build the execution input from the stored TYPED intent
+  async executeSchedule(schedule: ScheduleRecord): Promise<ScheduleExecutionResult> {
     const intent = schedule.intent;
 
-    const sourceAccount = {
-      agentId: schedule.agentId,
-      ownerId: schedule.ownerId,
-      accountId: () => "", // filled by pipeline
-      sequenceNumber: () => "0",
-      incrementSequenceNumber: () => {},
-    };
+    let sourceAccount: PipelineExecuteInput["sourceAccount"];
+    try {
+      const raw = await this.deps.getSourceAccount();
+      sourceAccount = {
+        agentId: schedule.agentId,
+        ownerId: schedule.ownerId,
+        accountId: raw.accountId,
+        sequenceNumber: raw.sequenceNumber,
+        incrementSequenceNumber: raw.incrementSequenceNumber,
+      };
+    } catch (e: any) {
+      return {
+        status: "rejected",
+        message: `Cannot load source account: ${e.message}`,
+        intent,
+        policyDecision: {
+          result: "deny",
+          reason: "source account load failed",
+          rule: "schedule",
+          intent,
+        },
+        simulationResult: null,
+      };
+    }
 
-    // 3. Run through the existing pipeline
     const outcome = await this.deps.pipelineExecutor({ intent, sourceAccount });
-
     return outcome;
   }
 }

@@ -8,3 +8,4 @@ dist
 .tsbuildinfo
 target/
 Cargo.lock
+*.tsbuildinfo

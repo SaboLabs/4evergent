@@ -1,5 +1,6 @@
 import type { ScheduleRecord } from "@4evergent/database";
 import type { SchedulerConfig, ExecutionContext } from "./scheduler-types.js";
+import type { ScheduleExecutionResult } from "./schedule-execution.js";
 
 type AgentInfo = { id: string; status: string; ownerId: string };
 
@@ -12,7 +13,7 @@ export class AgentScheduler {
   constructor(
     private scheduleStore: { get(id: string): Promise<ScheduleRecord | null>; listDue(before: string, limit?: number): Promise<ScheduleRecord[]>; update(id: string, patch: Partial<ScheduleRecord>): Promise<ScheduleRecord | null>; delete(id: string): Promise<boolean> },
     private agentStore: { get(id: string): Promise<AgentInfo | null> },
-    private executeCallback: (schedule: ScheduleRecord, ctx: ExecutionContext) => Promise<void>,
+    private executeCallback: (schedule: ScheduleRecord, ctx: ExecutionContext) => Promise<ScheduleExecutionResult>,
     config: SchedulerConfig = {}
   ) {
     this.clock = config.clock ?? (() => new Date());
