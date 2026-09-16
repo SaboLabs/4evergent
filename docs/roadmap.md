@@ -12,6 +12,19 @@
 | 8 | Agent scheduling & automation | **Shipped** |
 | 9 | Persistent execution queue with retry & dead-letter | **Shipped** |
 | 10 | Execution queue crash recovery | **Shipped** |
+| 11 | Agent self-serve creation & onboarding | **Shipped** |
+
+## Phase 11 Details (Shipped)
+
+### What was implemented
+
+- **AgentStore** (`packages/database/src/agent-types.ts`, `agent-store.ts`): `AgentStore` interface + InMemory + SQLite via `node:sqlite`, schema version 1. Exposes `create`, `get`, `getForOwner`, `listByOwner`, `update`, `delete` with owner-scoped queries.
+- **POST /agents endpoint** (`apps/api/src/index.ts`): validates `displayName` (required, ≤100 chars), `description`, `capabilities` (array of strings), `stellarAddress` (string). Binds to `requestCtx.ownerId`, persists via `AgentStore`, returns 201 with `agent` record.
+- **Frontend Agents page** (`apps/web/src/pages/Agents.tsx`): empty state with "Create Agent" button, modal form with loading/validation/API error/success handling. Updated `api.ts` with `createAgent()` method. Added modal/form CSS to `styles.css`.
+- **Shared types** (`packages/shared/src/types.ts`): `CreateAgentInput`, `CreateAgentRequest` matching API request shape.
+- **Backward compatibility**: existing `registerAgent()` now syncs to both in-memory Map and persistent store. All test helpers using `registerAgent()` continue to work.
+- **ADR-013** in `docs/architecture.md`
+- 18 new tests (10 API agent-create, 8 DB agent-store)
 
 ## Phase 8 Details (Shipped)
 

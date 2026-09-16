@@ -102,3 +102,19 @@ All decisions recorded via the ADR-lite convention. Each entry: **Status | Conte
 - Scheduler (Phase 8) and approval flow both enqueue through the same queue
 - Exactly-once is not guaranteed (single-process SQLite provides at-most-once deduplication via status claims); document as known limitation
 - Records in `executing` at crash time are stuck — a recovery scan on startup can re-queue them (deferred to future phase)
+
+## ADR-013: Agent Self-Serve Creation
+
+**Status:** Accepted | Phase 11 | 2026-09-16
+
+**Context:** Users could not create agents from the web UI. Agents had to be registered programmatically via `registerAgent()` on the API server instance, which required backend-only bootstrap. The `agents` Map was in-memory only and lost on restart.
+
+**Decision:** Introduce `AgentStore` abstraction (InMemory + SQLite via `node:sqlite`) and `POST /agents` endpoint. The endpoint validates input, binds the agent to `requestCtx.ownerId`, persists via `AgentStore`, and returns the created record. Existing `registerAgent()` now syncs to both the in-memory Map (for backward compatibility with scheduler and authorization) and the persistent store. `handleListAgents` and `handleGetAgent` now read from `AgentStore` instead of the in-memory Map.
+
+**Consequences:**
+- Users can create agents from the Agents page without backend bootstrap
+- Agents survive API restart when SQLite store is configured
+- Owner isolation enforced via existing `ResourceAuthorizationService`
+- Backward compatible: existing test helpers using `registerAgent()` still work
+- No production authentication — `requestContext.ownerId` is set server-side (existing limitation)
+- `AgentRecord` has no secret fields by construction
