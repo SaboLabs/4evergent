@@ -9,6 +9,40 @@
 | 5 | Soroban AgentRegistry contract (register/update/deactivate/query) | Scaffolded, not compiled |
 | 6 | Soroban Permissions contract (delegation + revocation) | Scaffolded, not compiled |
 | 7 | Multi-agent capability discovery & agent-to-agent economy | Future |
+| 8 | Agent scheduling & automation | **Shipped** |
+| 9 | Persistent execution queue with retry & dead-letter | **Shipped** |
+| 10 | Execution queue crash recovery | **Shipped** |
+
+## Phase 8 Details (Shipped)
+
+### What was implemented
+
+- **AgentScheduler** (`apps/api/src/scheduler.ts`): polls `ScheduleStore.listDue()` on configurable interval (default 60s), executes due schedules via typed callback, updates lastRunAt/nextRunAt, failure isolation per schedule, start/stop lifecycle
+- **ScheduleExecutionService** (`apps/api/src/schedule-execution.ts`): runs a scheduled intent through the SAME `TransactionPipeline.execute()` as manual intents; rebuilds `sourceAccount` from signer via `StellarAdapter`
+- **API server wiring** (`apps/api/src/index.ts`): scheduler opt-in via `options.scheduler.enabled`, integrated into server lifecycle (start/stop), typed callback returns `ScheduleExecutionResult`
+- **ScheduleExecutionResult** (`apps/api/src/schedule-execution.ts`): result type merging PipelineOutcome with scheduler-specific fields
+- 10 scheduler tests + 4 integration tests
+
+## Phase 9 Details (Shipped)
+
+### What was implemented
+
+- **ExecutionStore** (`packages/database/src/execution-types.ts`, `execution-store.ts`): `ExecutionRecord` with full lifecycle status (`queued → executing → submitted → confirmed → failed → dead_letter`), InMemory + SQLite via `node:sqlite`, schema version 1. Exposes `listDue`, `listByOwner`, `listByAgent`, `getForOwner`,atomic `update`
+- **ExecutionQueue** (`apps/api/src/execution-queue.ts`): polls due records, transitions to `executing`, invokes pipeline executor, moves to terminal state or schedules retry with backoff. Bounded concurrency, duplicate safety via status-claim guard
+- **Error classification** (`packages/database/src/execution-policy.ts`): transient (network/Horizon/submission) vs permanent (policy deny, validation, auth). Bounded retry (max 3, configurable) with exponential backoff capped at maxDelayMs. Permanent failures short-circuit to dead_letter
+- **API server integration** (`apps/api/src/index.ts`): approve enqueues `ExecutionRecord` (preserving `approvalId`) instead of fire-and-forget; scheduler enqueues with `activityId`; owner-scoped read endpoints `GET /agents/:id/executions`, `GET /executions/:id`, `GET /agent-queue`; `createApiServer` returns `executionStore`, `executionQueue`
+- **ADR-012** in `docs/architecture.md`
+- 20 new tests (enqueue+process, retry→dead_letter, transient→retry, permanent→no retry, crash recovery, duplicate safety, error classification, backoff formula, owner isolation, approval boundary, scheduler+manual regression)
+
+## Phase 10 Details (Shipped)
+
+### What was implemented
+
+- **Crash recovery query** (`packages/database/src/execution-types.ts`, `execution-store.ts`): `ExecutionStore.listStuckExecuting()` returns records with `status === "executing"` ordered by `created_at ASC`; implemented in both InMemory and SQLite stores
+- **ExecutionRecoveryService** (`apps/api/src/execution-recovery.ts`): startup recovery service with `recover()` method — scans stuck executions, re-fetches each for idempotency guard, transitions to `failed` with immediate `nextRetryAt`, preserves `attempt`/`errorClass`, does NOT create duplicates, does NOT execute transactions
+- **Startup lifecycle** (`apps/api/src/index.ts`): `createApiServer()` is now `async`; recovery runs BEFORE queue worker starts eliminating race condition (store init → recovery scan → worker start); all test files updated to `await createApiServer()`; `recoveryService` exposed via return value
+- **ADR-012** updated in `docs/architecture.md` with crash recovery details
+- 10 new tests (executing→failed, retry count preserved, terminal states untouched, no duplicates, idempotent second call, queue reprocesses recovered record, owner isolation, queue disabled no worker, nextRetryAt immediately eligible, startedAt cleared)
 
 ## Phase 2 Details (Shipped)
 
