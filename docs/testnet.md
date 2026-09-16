@@ -51,8 +51,10 @@ npx tsx -e "import { StellarAdapter } from './src/index.ts'; const a=new Stellar
 ## Run the test suite
 
 ```bash
-pnpm test  # all packages (81 tests: shared 3, agent-core 11, policy 15, database 27, stellar 15, api 10)
+pnpm test  # all packages (117 tests: shared 3, agent-core 11, policy 15, database 33, stellar 15, api 34, web 6)
 ```
+
+A React web dashboard is included (`apps/web`). Start it with `pnpm --filter @4evergent/web dev` (API must be running on port 3000). The dashboard is a local development tool — read-only views of agents/activity/approvals and an XLM payment intent form. All signing and policy enforcement happen on the backend.
 
 Integration tests run against in-memory HTTP servers with deterministic mocks. No live testnet calls are made by CI tests. The SQLite stores are tested with on-disk temp files under `os.tmpdir()` and verified to survive store reopen (restart simulation). Live testnet submission has NOT been performed in this phase.
 

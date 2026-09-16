@@ -94,8 +94,51 @@ export function createApiServer(options: ServerOptions) {
     if (method === "GET" && url === "/health") {
       return json(res, { status: "ok", signerAccountId: options.signer.getAccountId() });
     }
+    if (method === "GET" && url === "/agents") {
+      return handleListAgents(req, res);
+    }
+    if (method === "GET" && /^\/agents\/[^/]+\/activity(\?.*)?$/.test(url)) {
+      return handleAgentActivity(req, res);
+    }
+    if (method === "GET" && /^\/approvals(\?.*)?$/.test(url)) {
+      return handleListApprovals(req, res);
+    }
     json(res, { error: "not found" }, 404);
   });
+
+  async function handleListAgents(_req: any, res: any) {
+    const agentList = [...agents.values()].map((a) => ({
+      id: a.id,
+      displayName: a.displayName,
+      description: a.description,
+      owner: a.owner,
+      stellarAddress: a.stellarAddress,
+      capabilities: a.capabilities,
+      active: a.active,
+      createdAt: a.createdAt,
+    }));
+    return json(res, { agents: agentList });
+  }
+
+  async function handleAgentActivity(req: any, res: any) {
+    const urlObj = new URL(req.url ?? "", "http://localhost");
+    const match = urlObj.pathname.match(/^\/agents\/([^/]+)\/activity$/);
+    const agentId = match?.[1];
+    if (!agentId) return json(res, { error: "invalid agent id in path" }, 400);
+    const limit = Math.max(1, Math.min(100, Number(urlObj.searchParams.get("limit") ?? 50) || 50));
+    const activity = await store.listByAgent(agentId, limit);
+    return json(res, { agentId, activity });
+  }
+
+  async function handleListApprovals(req: any, res: any) {
+    const urlObj = new URL(req.url ?? "", "http://localhost");
+    const statusFilter = urlObj.searchParams.get("status") ?? undefined;
+    const all = await approvals.listAll(200);
+    const filtered = statusFilter
+      ? all.filter((r) => r.status === statusFilter).slice(0, 50)
+      : all.slice(0, 50);
+    return json(res, { approvals: filtered });
+  }
 
   async function handleIntent(req: any, res: any) {
     const agentId = extractAgentId(req.url);
@@ -295,7 +338,12 @@ export function createApiServer(options: ServerOptions) {
   return {
     server,
     listen: (port: number) => new Promise<void>((resolve) => server.listen(port, "127.0.0.1", resolve)),
-    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+    close: () => new Promise<void>((resolve) => {
+      // Abort lingering keep-alive connections so the server actually shuts
+      // down (Node's http close() waits for active sockets otherwise).
+      server.closeAllConnections?.();
+      server.close(() => resolve());
+    }),
     registerAgent: (agent: Agent) => agents.set(agent.id, agent),
     store,
     approvals,

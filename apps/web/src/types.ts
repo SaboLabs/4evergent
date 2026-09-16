@@ -1,0 +1,115 @@
+// Client-side types mirroring the API responses.
+// These intentionally omit all secret, XDR, and transaction-blob fields.
+// The API is the source of truth — types here are for frontend ergonomics.
+
+export type ActivityStatus =
+  | "pending"
+  | "rejected"
+  | "requires_approval"
+  | "approved"
+  | "signed"
+  | "submitted"
+  | "failed";
+
+export type AuthorizationStatus =
+  | "not_required"
+  | "pending_approval"
+  | "approved"
+  | "denied_by_policy"
+  | "denied_by_simulation";
+
+export type ApprovalStatus =
+  | "pending_approval"
+  | "approved"
+  | "rejected"
+  | "expired"
+  | "executing"
+  | "submitted"
+  | "confirmed"
+  | "failed";
+
+export type IntentType = "payment" | "trustline" | "contract_call" | "account_settings";
+
+export interface AgentIntent {
+  type: IntentType;
+  asset?: string;
+  amount?: string;
+  destination?: string;
+  reason?: string;
+  memo?: string;
+  // Other intent fields are present but stripped by the API for sensitive fields.
+  // We only model what the frontend needs to display.
+  [key: string]: unknown;
+}
+
+export interface PolicyDecision {
+  result: "allow" | "deny" | "requires_approval";
+  reason: string;
+  rule: string;
+  intent: AgentIntent;
+}
+
+export interface SimulationResult {
+  success: boolean;
+  fee: string;
+  operations: number;
+  warnings: string[];
+  error?: string;
+}
+
+export interface AgentRecord {
+  id: string;
+  displayName: string;
+  description: string;
+  owner: string;
+  stellarAddress: string;
+  capabilities: string[];
+  active: boolean;
+  createdAt: string;
+}
+
+export interface ActivityRecord {
+  id: string;
+  agentId: string;
+  intent: AgentIntent;
+  policyDecision: PolicyDecision;
+  authorizationStatus: AuthorizationStatus | null;
+  simulationResult: SimulationResult | null;
+  txHash: string | null;
+  status: ActivityStatus;
+  error: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ApprovalRecord {
+  id: string;
+  activityId: string;
+  agentId: string;
+  intent: AgentIntent;
+  policyDecision: PolicyDecision;
+  status: ApprovalStatus;
+  requestedAt: string;
+  approvedAt: string | null;
+  rejectedAt: string | null;
+  expiredAt: string | null;
+  approver: string | null;
+  expiresAt: string | null;
+  txHash: string | null;
+  error: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ApiError {
+  error: string;
+}
+
+export interface SubmitPaymentIntent {
+  type: "payment";
+  asset: string;
+  destination: string;
+  amount: string;
+  reason: string;
+  memo?: string;
+}

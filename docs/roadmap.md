@@ -5,9 +5,9 @@
 | 1 | Agent identity types, policy engine, intent validation, Stellar read adapter | Shipped |
 | 2 | Full transaction pipeline (construct → simulate → authorize → sign → submit) with Signer abstraction | **Shipped** |
 | 3 | Persistent SQLite stores, approval/reject HTTP endpoints, daily limit enforcement from activity state | **Shipped** |
-| 4 | Soroban AgentRegistry contract (register/update/deactivate/query) | Scaffolded, not compiled |
-| 5 | Soroban Permissions contract (delegation + revocation) | Scaffolded, not compiled |
-| 6 | Frontend agent dashboard (discovery, profile, activity) | Future |
+| 4 | React web dashboard (Overview / Agents / Activity / Approvals / Submit Intent) + read-only API endpoints | **Shipped** |
+| 5 | Soroban AgentRegistry contract (register/update/deactivate/query) | Scaffolded, not compiled |
+| 6 | Soroban Permissions contract (delegation + revocation) | Scaffolded, not compiled |
 | 7 | Multi-agent capability discovery & agent-to-agent economy | Future |
 
 ## Phase 2 Details (Shipped)
@@ -56,3 +56,30 @@
 ### Live Testnet Calls
 
 No live Stellar testnet calls were executed during Phase 2 and Phase 3 implementation. All tests use deterministic mocks and in-process HTTP servers. The simulation and submission code paths call real Horizon APIs, but they are only reachable through the pipeline after policy ALLOW (which the test suite gates via DENY or requires_approval). A live testnet smoke test (`packages/stellar/test/live-smoke.ts`) is present but excluded from the default suite; run it manually with `npx tsx test/live-smoke.ts` when a funded testnet account is available.
+
+## Phase 4 Details (Shipped)
+
+### What was implemented
+
+- **Web dashboard** (`apps/web`): React + TypeScript + Vite single-page app.
+  - Overview page: signer account ID, agent count, network/pipeline status.
+  - Agents page: list registered agents (id, name, address, capabilities, active status).
+  - Activity page: aggregated activity records across agents (id, agent, intent type, amount, status, timestamp).
+  - Approvals page: pending approval list with Approve and Reject buttons (reject requires confirmation dialog).
+  - Submit Intent page: XLM payment intent form with client-side validation (amount positive, destination G..., reason ≥ 3 chars).
+  - Navigation via sidebar tabs.
+  - Loading, empty, and error states on all data-driven pages.
+- **API read endpoints** (`apps/api/src/index.ts`):
+  - `GET /agents` — public agent list (no secret fields).
+  - `GET /agents/:id/activity?limit=N` — persisted activity per agent (limit clamped 1–100).
+  - `GET /approvals?status=<status>` — approval list, optional status filter.
+- **Store interface** (`packages/database/src/index.ts`): added `listAll(limit?)` to `ActivityStore` and `ApprovalStore`, implemented in all 4 store variants (in-memory + SQLite).
+- **Frontend tests** (`apps/web/src/pages/__tests__/Approvals.test.tsx`): 6 vitest + RTL tests covering loading, empty state, approval row rendering, approve action, reject confirmation, reject cancel.
+- **API tests** (`apps/api/test/read-endpoints.test.ts`): 9 tests covering agents list, empty list, activity retrieval, limit param, approvals list, status filtering, secret/XDR leak checks.
+
+### Known Limitations (Phase 4 additions)
+
+- **Frontend trust boundary**: The dashboard never receives private keys, seeds, secrets, or raw XDR. All policy evaluation, signing, and submission remain server-side.
+- **Approval ownership**: Not authenticated — any party with `approvalId` can approve/reject through the UI (backend limitation, not fixed in UI).
+- **Intent submission**: Only XLM payment is exposed. No UI for trustline, contract_call, account_settings, or raw XDR.
+- **Frontend does NOT bypass the approval state machine** — Approve/Reject buttons call the same backend endpoints that enforce transitions.

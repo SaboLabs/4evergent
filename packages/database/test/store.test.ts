@@ -108,6 +108,46 @@ function runStoreTests(name: string, makeStores: () => { activity: ActivityStore
     }
   });
 
+  test(`${name}: listAll returns all records across agents`, async () => {
+    const { activity, cleanup } = makeStores();
+    try {
+      const a = createActivity("agent-a", makeIntent("1"), makeDecision());
+      const b = createActivity("agent-b", makeIntent("2"), makeDecision());
+      await activity.record(a);
+      await activity.record(b);
+      const all = await activity.listAll(50);
+      assert.equal(all.length, 2);
+      const ids = all.map((r) => r.id);
+      assert.ok(ids.includes(a.id));
+      assert.ok(ids.includes(b.id));
+    } finally {
+      cleanup?.();
+    }
+  });
+
+  test(`${name}: listAll respects limit`, async () => {
+    const { activity, cleanup } = makeStores();
+    try {
+      for (let i = 0; i < 5; i++) {
+        await activity.record(createActivity("agent-a", makeIntent(String(i)), makeDecision()));
+      }
+      const all = await activity.listAll(3);
+      assert.equal(all.length, 3);
+    } finally {
+      cleanup?.();
+    }
+  });
+
+  test(`${name}: listAll returns empty when no records`, async () => {
+    const { activity, cleanup } = makeStores();
+    try {
+      const all = await activity.listAll(50);
+      assert.deepEqual(all, []);
+    } finally {
+      cleanup?.();
+    }
+  });
+
   test(`${name}: get nonexistent returns null`, async () => {
     const { activity, approval, cleanup } = makeStores();
     try {

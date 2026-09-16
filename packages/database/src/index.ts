@@ -19,6 +19,7 @@ export interface ActivityStore {
   get(id: string): Promise<ActivityRecord | null>;
   listByAgent(agentId: string, limit?: number): Promise<ActivityRecord[]>;
   listByStatus(agentId: string, status: string, limit?: number): Promise<ActivityRecord[]>;
+  listAll(limit?: number): Promise<ActivityRecord[]>;
   update(id: string, patch: Partial<ActivityRecord>): Promise<ActivityRecord | null>;
 }
 
@@ -40,6 +41,7 @@ export interface ApprovalStore {
   get(id: string): Promise<ApprovalRecord | null>;
   listByAgent(agentId: string, limit?: number): Promise<ApprovalRecord[]>;
   listByStatus(agentId: string, status: string, limit?: number): Promise<ApprovalRecord[]>;
+  listAll(limit?: number): Promise<ApprovalRecord[]>;
   update(id: string, patch: Partial<ApprovalRecord>): Promise<ApprovalRecord | null>;
 }
 
@@ -105,6 +107,12 @@ export class InMemoryActivityStore implements ActivityStore {
       .slice(0, limit);
   }
 
+  async listAll(limit = 50): Promise<ActivityRecord[]> {
+    return [...this.records.values()]
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .slice(0, limit);
+  }
+
   async update(id: string, patch: Partial<ActivityRecord>): Promise<ActivityRecord | null> {
     const existing = this.records.get(id);
     if (!existing) return null;
@@ -140,6 +148,12 @@ export class InMemoryApprovalStore implements ApprovalStore {
   async listByStatus(agentId: string, status: string, limit = 50): Promise<ApprovalRecord[]> {
     return [...this.records.values()]
       .filter((r) => r.agentId === agentId && r.status === status)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .slice(0, limit);
+  }
+
+  async listAll(limit = 50): Promise<ApprovalRecord[]> {
+    return [...this.records.values()]
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
       .slice(0, limit);
   }

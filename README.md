@@ -120,6 +120,18 @@ pnpm build
 pnpm test
 ```
 
+### Run the dashboard
+
+```bash
+# terminal 1: start the API server
+pnpm --filter @4evergent/api dev
+
+# terminal 2: start the web dashboard
+pnpm --filter @4evergent/web dev
+```
+
+The dashboard connects to `http://localhost:3000`. Set `VITE_API_BASE` env var to point to a different API URL. The dashboard is a local development tool — it provides read-only views of agents/activity/approvals and an XLM payment intent submission form. All policy enforcement, signing, and submission remain server-side.
+
 Each package has its own `package.json` with `build`, `dev`, `test`, and `typecheck` scripts.
 
 ## Testnet setup
@@ -152,10 +164,11 @@ No capability is considered complete without: schema validation, policy coverage
 | 1 | Agent identity, policy engine, intent validation, Stellar read adapter, activity logging | ✅ Shipped |
 | 2 | Full transaction pipeline (construct → simulate → authorize → sign → submit) with Signer abstraction | ✅ Shipped |
 | 3 | Persistent SQLite stores, approval/reject HTTP endpoints, daily limit enforcement | ✅ Shipped |
-| 4 | Soroban AgentRegistry contract (register/update/deactivate/query) | Future |
-| 5 | Soroban Permissions contract (delegation + revocation) | Future |
-| 6 | Frontend agent dashboard (discover, profile, activity) | Future |
-| 7 | Multi-agent capability discovery & economy | Future |
+| 4 | React web dashboard (Overview / Agents / Activity / Approvals / Submit Intent) + read-only API | ✅ Shipped |
+| 5 | Soroban AgentRegistry contract (register/update/deactivate/query) | Future |
+| 6 | Soroban Permissions contract (delegation + revocation) | Future |
+| 7 | Frontend agent dashboard (discover, profile, activity) | Future |
+| 8 | Multi-agent capability discovery & economy | Future |
 
 ---
 

@@ -103,6 +103,13 @@ export class SQLiteActivityStore implements ActivityStore {
     return rows.map((r) => rowToActivityRecord(r as unknown as ActivityRow));
   }
 
+  async listAll(limit = 50): Promise<ActivityRecord[]> {
+    const rows = this.db
+      .prepare("SELECT * FROM activities ORDER BY created_at DESC LIMIT ?")
+      .all(limit);
+    return rows.map((r) => rowToActivityRecord(r as unknown as ActivityRow));
+  }
+
   async update(id: string, patch: Partial<ActivityRecord>): Promise<ActivityRecord | null> {
     const existing = await this.get(id);
     if (!existing) return null;
@@ -250,6 +257,13 @@ export class SQLiteApprovalStore implements ApprovalStore {
         "SELECT * FROM approvals WHERE agent_id = ? AND status = ? ORDER BY created_at DESC LIMIT ?"
       )
       .all(agentId, status, limit);
+    return rows.map((r) => rowToApprovalRecord(r as unknown as ApprovalRow));
+  }
+
+  async listAll(limit = 50): Promise<ApprovalRecord[]> {
+    const rows = this.db
+      .prepare("SELECT * FROM approvals ORDER BY created_at DESC LIMIT ?")
+      .all(limit);
     return rows.map((r) => rowToApprovalRecord(r as unknown as ApprovalRow));
   }
 
