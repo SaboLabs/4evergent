@@ -17,6 +17,7 @@ import { ScheduleExecutionService } from "./schedule-execution.js";
 import { ExecutionQueue } from "./execution-queue.js";
 import { ExecutionRecoveryService } from "./execution-recovery.js";
 import { TransactionStatusReconciler } from "@4evergent/stellar";
+import { AccountSequenceCoordinator } from "./account-sequence-coordinator.js";
 import type { ExecutionRecord } from "@4evergent/database";
 import type { ScheduleExecutionResult } from "./schedule-execution.js";
 import {
@@ -148,6 +149,11 @@ export async function createApiServer(options: ServerOptions) {
   const policy = new PolicyEngine(options.policyRules, store as any);
   const adapter = new StellarAdapter(options.horizonUrl);
 
+  // --- Account sequence coordinator (Phase 25) ---
+  // Serializes sequence-sensitive execution for the SAME Stellar source account.
+  // Different accounts remain concurrent.
+  const sequenceCoordinator = new AccountSequenceCoordinator();
+
   // --- Execution queue setup ---
   const executionStore: ExecutionStore =
     options.executionStore ??
@@ -197,18 +203,36 @@ export async function createApiServer(options: ServerOptions) {
     };
 
     const pipelineExecutor = async (record: ExecutionRecord) => {
-      const sourceAccount = await getSourceAccount();
-      const outcome = await pipeline.execute({ intent: record.intent, sourceAccount });
-      const txHash = (outcome as { txHash?: string }).txHash;
-      return {
-        record,
-        success: outcome.status === "submitted",
-        status: outcome.status,
-        error: outcome.message,
-        errorClass: outcome.status === "rejected" ? "permanent" as const : "transient" as const,
-        txHash,
-        submittedHash: txHash ?? null,
-      };
+      // Phase 25: Wrap sequence-sensitive execution in account-scoped lock.
+      //
+      // WHY: Two concurrent executions using the SAME Stellar source account
+      // could read the same Horizon sequence and build transactions with the
+      // same sequence number. One would fail at Horizon with "unexpected
+      // sequence". The lock serializes the critical section (read sequence →
+      // build → simulate → sign → submit) per Stellar account.
+      //
+      // The coordination key is the signer's Stellar public key (G...), which
+      // is stable per server instance. All executions through this API server
+      // share the same signer → same Stellar account → serialized. Different
+      // server instances (different signers) are not affected.
+      //
+      // getSourceAccount() is called INSIDE the lock to prevent the race where
+      // two executions read the same sequence before either acquires the lock.
+      const accountId = options.signer.getAccountId();
+      return sequenceCoordinator.runExclusive(accountId, async () => {
+        const sourceAccount = await getSourceAccount();
+        const outcome = await pipeline.execute({ intent: record.intent, sourceAccount });
+        const txHash = (outcome as { txHash?: string }).txHash;
+        return {
+          record,
+          success: outcome.status === "submitted",
+          status: outcome.status,
+          error: outcome.message,
+          errorClass: outcome.status === "rejected" ? "permanent" as const : "transient" as const,
+          txHash,
+          submittedHash: txHash ?? null,
+        };
+      });
     };
 
     const preCheck = async (txHash: string) => {
