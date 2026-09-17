@@ -26,6 +26,8 @@ export interface ActivityStore {
   update(id: string, patch: Partial<ActivityRecord>): Promise<ActivityRecord | null>;
   getByIdempotencyKey(ownerId: string, agentId: string, key: string): Promise<ActivityRecord | null>;
   recordIdempotent(key: string, record: ActivityRecord): Promise<{ record: ActivityRecord; created: boolean }>;
+  /** Atomically reserve daily spending. Returns true if reservation succeeded, false if limit would be exceeded. */
+  reserveDailySpending(agentId: string, asset: string, amount: string, limit: string): Promise<boolean>;
 }
 
 /**
@@ -94,6 +96,8 @@ import type { ScheduleStore, ScheduleRecord } from "./schedule-types.js";
  */
 export class InMemoryActivityStore implements ActivityStore {
   private records = new Map<string, ActivityRecord>();
+  private dailySpending = new Map<string, number>();
+  private idempotencyLock: Promise<unknown> = Promise.resolve();
 
   async record(record: ActivityRecord): Promise<void> {
     this.records.set(record.id, record);
@@ -144,12 +148,42 @@ export class InMemoryActivityStore implements ActivityStore {
     return null;
   }
 
+  /**
+   * Atomic idempotency reservation for InMemory store.
+   *
+   * Uses a promise chain to serialize get-check-insert operations,
+   * mimicking the atomicity provided by SQLite's UNIQUE INDEX.
+   */
   async recordIdempotent(key: string, record: ActivityRecord): Promise<{ record: ActivityRecord; created: boolean }> {
-    const existing = await this.getByIdempotencyKey(record.ownerId, record.agentId, key);
-    if (existing) return { record: existing, created: false };
-    record.idempotencyKey = key;
-    this.records.set(record.id, record);
-    return { record, created: true };
+    // Serialize through promise chain for atomicity
+    const result = this.idempotencyLock.then(async () => {
+      const existing = await this.getByIdempotencyKey(record.ownerId, record.agentId, key);
+      if (existing) return { record: existing, created: false };
+      record.idempotencyKey = key;
+      this.records.set(record.id, record);
+      return { record, created: true };
+    });
+    // Update lock to include this operation (catch errors to avoid breaking chain)
+    this.idempotencyLock = result.catch(() => undefined);
+    return result;
+  }
+
+  async reserveDailySpending(agentId: string, asset: string, amount: string, limit: string): Promise<boolean> {
+    const amountNum = parseFloat(amount);
+    const limitNum = parseFloat(limit);
+    if (isNaN(amountNum) || isNaN(limitNum)) return false;
+
+    const now = new Date();
+    const day = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
+      .toISOString()
+      .slice(0, 10);
+
+    const mapKey = `${agentId}:${asset}:${day}`;
+    const current = this.dailySpending.get(mapKey) ?? 0;
+    if (current + amountNum > limitNum) return false;
+
+    this.dailySpending.set(mapKey, current + amountNum);
+    return true;
   }
 
   async update(id: string, patch: Partial<ActivityRecord>): Promise<ActivityRecord | null> {

@@ -20,7 +20,7 @@ import type {
  * database server required. Data persists across process restarts in a file
  * at the path provided to the constructor.
  *
- * Schema is versioned in _meta (schema_version = 2). initSchema() is
+ * Schema is versioned in _meta (schema_version = 3). initSchema() is
  * idempotent and safe to call on every construction.
  */
 export class SQLiteActivityStore implements ActivityStore {
@@ -34,7 +34,7 @@ export class SQLiteActivityStore implements ActivityStore {
   private initSchema(): void {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS _meta (key TEXT PRIMARY KEY, value TEXT);
-      INSERT OR IGNORE INTO _meta (key, value) VALUES ('schema_version', '2');
+      INSERT OR IGNORE INTO _meta (key, value) VALUES ('schema_version', '3');
 
       CREATE TABLE IF NOT EXISTS activities (
         id TEXT PRIMARY KEY,
@@ -59,6 +59,20 @@ export class SQLiteActivityStore implements ActivityStore {
         ON activities(owner_id, agent_id, idempotency_key)
         WHERE idempotency_key IS NOT NULL;
     `);
+    // Phase 23: daily_spending table for atomic spending reservation
+    try {
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS daily_spending (
+          agent_id TEXT NOT NULL,
+          asset TEXT NOT NULL,
+          day TEXT NOT NULL,
+          total REAL NOT NULL DEFAULT 0,
+          PRIMARY KEY (agent_id, asset, day)
+        );
+      `);
+    } catch {
+      // Table already exists.
+    }
   }
 
   async record(record: ActivityRecord): Promise<void> {
@@ -91,8 +105,7 @@ export class SQLiteActivityStore implements ActivityStore {
 
   async get(id: string): Promise<ActivityRecord | null> {
     const row = this.db.prepare("SELECT * FROM activities WHERE id = ?").get(id);
-    if (!row) return null;
-    return rowToActivityRecord(row as unknown as ActivityRow);
+    return row ? rowToActivityRecord(row as unknown as ActivityRow) : null;
   }
 
   async listByAgent(agentId: string, limit = 50): Promise<ActivityRecord[]> {
@@ -104,9 +117,7 @@ export class SQLiteActivityStore implements ActivityStore {
 
   async listByStatus(agentId: string, status: string, limit = 50): Promise<ActivityRecord[]> {
     const rows = this.db
-      .prepare(
-        "SELECT * FROM activities WHERE agent_id = ? AND status = ? ORDER BY created_at DESC LIMIT ?"
-      )
+      .prepare("SELECT * FROM activities WHERE agent_id = ? AND status = ? ORDER BY created_at DESC LIMIT ?")
       .all(agentId, status, limit);
     return rows.map((r) => rowToActivityRecord(r as unknown as ActivityRow));
   }
@@ -139,12 +150,112 @@ export class SQLiteActivityStore implements ActivityStore {
     return row ? rowToActivityRecord(row as unknown as ActivityRow) : null;
   }
 
+  /**
+   * Atomic idempotency reservation.
+   *
+   * Phase 23: Uses INSERT to leverage the UNIQUE INDEX
+   * idx_activities_idempotency. The database guarantees only one record per
+   * (owner_id, agent_id, idempotency_key). Concurrent inserts result in exactly
+   * one winner; losers catch the UNIQUE violation and read back the winner.
+   */
   async recordIdempotent(key: string, record: ActivityRecord): Promise<{ record: ActivityRecord; created: boolean }> {
+    // Fast path: check if already exists (avoids INSERT overhead)
     const existing = await this.getByIdempotencyKey(record.ownerId, record.agentId, key);
     if (existing) return { record: existing, created: false };
+
+    // Atomic INSERT — UNIQUE INDEX enforces single winner
     record.idempotencyKey = key;
-    await this.record(record);
-    return { record, created: true };
+    try {
+      this.db
+        .prepare(
+          `INSERT INTO activities
+           (id, agent_id, owner_id, idempotency_key, intent_json, policy_decision_json, authorization_status,
+            simulation_result_json, tx_hash, status, error, created_at, updated_at)
+           VALUES (@id, @agent_id, @owner_id, @idempotency_key, @intent_json, @policy_decision_json, @authorization_status,
+                   @simulation_result_json, @tx_hash, @status, @error, @created_at, @updated_at)`
+        )
+        .run({
+          id: record.id,
+          agent_id: record.agentId,
+          owner_id: record.ownerId,
+          idempotency_key: record.idempotencyKey ?? null,
+          intent_json: JSON.stringify(record.intent),
+          policy_decision_json: JSON.stringify(record.policyDecision),
+          authorization_status: record.authorizationStatus,
+          simulation_result_json: record.simulationResult
+            ? JSON.stringify(record.simulationResult)
+            : null,
+          tx_hash: record.txHash,
+          status: record.status,
+          error: record.error,
+          created_at: record.createdAt,
+          updated_at: record.updatedAt,
+        });
+      return { record, created: true };
+    } catch (e: any) {
+      // UNIQUE constraint violation — another caller won the race; return their record
+      if (e?.message?.includes("UNIQUE") || e?.code === "ERR_SQLITE_CONSTRAINT") {
+        const winner = await this.getByIdempotencyKey(record.ownerId, record.agentId, key);
+        if (winner) return { record: winner, created: false };
+      }
+      throw e;
+    }
+  }
+
+  /**
+   * Atomically reserve daily spending using conditional UPDATE.
+   *
+   * Phase 23: Uses a single SQL UPDATE with WHERE clause checking the limit:
+   * - UPDATE ... WHERE agent_id = ? AND asset = ? AND day = ? AND total + amount <= limit
+   * - If changes === 1: reservation succeeded
+   * - If changes === 0: row doesn't exist OR limit would be exceeded
+   *
+   * Concurrent calls are serialized by SQLite's row-level locking. The PRIMARY KEY
+   * (agent_id, asset, day) ensures one row per asset per day.
+   */
+  async reserveDailySpending(agentId: string, asset: string, amount: string, limit: string): Promise<boolean> {
+    const amountNum = parseFloat(amount);
+    const limitNum = parseFloat(limit);
+    if (isNaN(amountNum) || isNaN(limitNum)) return false;
+
+    const now = new Date();
+    const day = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
+      .toISOString()
+      .slice(0, 10); // YYYY-MM-DD
+
+    // Conditional UPDATE: only succeeds if current total + amount <= limit
+    const updateResult = this.db
+      .prepare(
+        `UPDATE daily_spending SET total = total + ?
+         WHERE agent_id = ? AND asset = ? AND day = ? AND total + ? <= ?`
+      )
+      .run(amountNum, agentId, asset, day, amountNum, limitNum);
+
+    if (updateResult.changes === 1) {
+      return true; // Reservation succeeded
+    }
+
+    // UPDATE affected 0 rows — either row doesn't exist or limit exceeded
+    // Try INSERT (row doesn't exist yet — first spend of the day)
+    try {
+      this.db
+        .prepare(
+          `INSERT INTO daily_spending (agent_id, asset, day, total) VALUES (?, ?, ?, ?)`
+        )
+        .run(agentId, asset, day, amountNum);
+      // INSERT succeeded — verify amount doesn't exceed limit
+      return amountNum <= limitNum;
+    } catch (e: any) {
+      // PRIMARY KEY conflict — row was created by concurrent caller between our UPDATE and INSERT
+      // Retry the UPDATE once (the concurrent caller's INSERT committed first)
+      const retryResult = this.db
+        .prepare(
+          `UPDATE daily_spending SET total = total + ?
+           WHERE agent_id = ? AND asset = ? AND day = ? AND total + ? <= ?`
+        )
+        .run(amountNum, agentId, asset, day, amountNum, limitNum);
+      return retryResult.changes === 1;
+    }
   }
 
   async update(id: string, patch: Partial<ActivityRecord>): Promise<ActivityRecord | null> {
@@ -159,6 +270,10 @@ export class SQLiteActivityStore implements ActivityStore {
     this.db.close();
   }
 }
+
+// ============================================================
+// SQLiteApprovalStore (unchanged except for daily_spending table)
+// ============================================================
 
 /**
  * SQLiteApprovalStore — persistent ApprovalStore backed by SQLite.
@@ -310,7 +425,7 @@ export class SQLiteApprovalStore implements ApprovalStore {
 
   async listByOwner(ownerId: string, limit = 50): Promise<ApprovalRecord[]> {
     const rows = this.db
-      .prepare("SELECT * FROM approvals WHERE owner_id = ? ORDER BY created_at DESC LIMIT ?")
+      .prepare("SELECT * FROM approvals WHERE owner_id = ? ORDER BY updated_at DESC LIMIT ?")
       .all(ownerId, limit);
     return rows.map((r) => rowToApprovalRecord(r as unknown as ApprovalRow));
   }
@@ -334,6 +449,10 @@ export class SQLiteApprovalStore implements ApprovalStore {
     this.db.close();
   }
 }
+
+// ============================================================
+// Row types + conversion functions
+// ============================================================
 
 interface ActivityRow {
   id: string;

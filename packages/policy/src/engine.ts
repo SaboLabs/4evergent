@@ -18,12 +18,14 @@ export class PolicyEngine {
   private rules: PolicyRules;
   private activityStore?: {
     listByAgent: (agentId: string, limit?: number) => Promise<ActivityRecord[]>;
+    reserveDailySpending?: (agentId: string, asset: string, amount: string, limit: string) => Promise<boolean>;
   };
 
   constructor(
     rules?: Partial<PolicyRules>,
     activityStore?: {
       listByAgent: (agentId: string, limit?: number) => Promise<ActivityRecord[]>;
+      reserveDailySpending?: (agentId: string, asset: string, amount: string, limit: string) => Promise<boolean>;
     }
   ) {
     this.rules = { ...DEFAULT_RULES, ...rules } as PolicyRules;
@@ -41,6 +43,18 @@ export class PolicyEngine {
       rule,
       intent,
     });
+
+    // 0. Amount validation — reject zero, negative, or non-numeric
+    const amountStr = extractAmount(intent);
+    if (amountStr !== null) {
+      const amountNum = parseFloat(amountStr);
+      if (isNaN(amountNum)) {
+        return decide("deny", `Invalid amount: '${amountStr}' is not a valid number`, "invalidAmount");
+      }
+      if (amountNum <= 0) {
+        return decide("deny", `Amount must be positive, got ${amountNum}`, "positiveAmount");
+      }
+    }
 
     // 1. Transaction type restriction
     const typeAllowed = this.rules.txTypeRestrictions[intent.type];
@@ -60,18 +74,33 @@ export class PolicyEngine {
     }
 
     // 3. Daily spending limit (requires persisted activity data)
-    if (amount !== null && this.activityStore) {
+    if (amountStr !== null && this.activityStore) {
       const dailyLimit = this.rules.dailySpendingLimit[asset] ?? this.rules.dailySpendingLimit["native"];
       if (dailyLimit) {
-        const spent = await this.getDailySpent(asset, agentId);
-        const limit = parseFloat(dailyLimit);
-        const remaining = limit - spent;
-        if (parseFloat(amount) > remaining) {
-          return decide(
-            "deny",
-            `Amount ${amount} ${asset} exceeds daily limit: spent ${spent.toFixed(7)}, limit ${limit}, remaining ${remaining.toFixed(7)}`,
-            "dailySpendingLimit"
+        // Phase 23: Use atomic reservation instead of read-then-write race
+        if (this.activityStore.reserveDailySpending) {
+          const reserved = await this.activityStore.reserveDailySpending(
+            agentId, asset, amountStr, dailyLimit
           );
+          if (!reserved) {
+            return decide(
+              "deny",
+              `Amount ${amountStr} ${asset} exceeds daily limit (atomically reserved failed)`,
+              "dailySpendingLimit"
+            );
+          }
+        } else {
+          // Fallback for InMemory/activity stores without atomic reservation
+          const spent = await this.getDailySpent(asset, agentId);
+          const limitNum = parseFloat(dailyLimit);
+          const remaining = limitNum - spent;
+          if (parseFloat(amountStr) > remaining) {
+            return decide(
+              "deny",
+              `Amount ${amountStr} ${asset} exceeds daily limit: spent ${spent.toFixed(7)}, limit ${limitNum}, remaining ${remaining.toFixed(7)}`,
+              "dailySpendingLimit"
+            );
+          }
         }
       }
     }
