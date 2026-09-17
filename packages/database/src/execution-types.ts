@@ -36,6 +36,8 @@ export interface ExecutionRecord {
   policyDecision: PolicyDecision | null;
   simulationResult: SimulationResult | null;
   txHash: string | null;
+  /** hash of the signed transaction submitted to Horizon, used for pre-check before retry */
+  submittedHash: string | null;
   error: string | null;
   /** number of attempts so far (incremented on each enqueue for retry) */
   attempt: number;

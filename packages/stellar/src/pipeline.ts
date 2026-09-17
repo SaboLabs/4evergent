@@ -184,6 +184,7 @@ export class TransactionPipeline {
         simulationResult: simResult,
         txHash: result.hash,
         activityId: activity.id,
+        submittedHash: result.hash,
       };
     } catch (e: any) {
       // Submit failed — record pre-submit hash + error for recovery/reconciliation
@@ -373,14 +374,15 @@ export class TransactionPipeline {
 
 export type PipelineOutcome =
   | {
-      status: "submitted";
-      message: string;
-      policyDecision: PolicyDecision;
-      simulationResult: SimulationLike;
-      txHash: string;
-      activityId?: string;
-      approvalId?: string;
-    }
+  status: "submitted";
+  message: string;
+  policyDecision: PolicyDecision;
+  simulationResult: SimulationLike;
+  txHash: string;
+  activityId?: string;
+  approvalId?: string;
+  submittedHash?: string;
+  }
   | {
       status: "simulation_failed";
       message: string;

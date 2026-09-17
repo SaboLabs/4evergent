@@ -8,7 +8,12 @@ export interface ExecutionResult {
   error?: string;
   errorClass?: string;
   txHash?: string;
+  submittedHash?: string | null;
 }
+
+export type PreCheckResult = "found" | "not_found" | "network_error";
+
+export type PreCheckFn = (txHash: string) => Promise<PreCheckResult>;
 
 export type PipelineExecutor = (record: ExecutionRecord) => Promise<ExecutionResult>;
 
@@ -39,6 +44,9 @@ export class ExecutionQueue {
   private intervalMs: number;
   private concurrency: number;
   private activeCount = 0;
+  private retryPolicy: RetryPolicy = DEFAULT_RETRY_POLICY;
+  private nowFn: () => Date = () => new Date();
+  private preCheck?: PreCheckFn;
 
   constructor(
     private store: ExecutionStore,
@@ -51,6 +59,7 @@ export class ExecutionQueue {
     this.concurrency = options.concurrency ?? 1;
     this.retryPolicy = options.retryPolicy ?? DEFAULT_RETRY_POLICY;
     this.nowFn = options.now ?? (() => new Date());
+    this.preCheck = options.preCheck;
   }
 
   start(): void {
@@ -106,6 +115,7 @@ export class ExecutionQueue {
   /**
    * Manual retry — transitions failed/dead_letter back to queued.
    * Uses atomic conditional update to prevent race with worker.
+   * Includes pre-check guard against ambiguous submission.
    */
   async retry(id: string, maxRetries: number): Promise<{ status: string; execution?: ExecutionRecord }> {
     const existing = await this.store.get(id);
@@ -116,6 +126,30 @@ export class ExecutionQueue {
     if (existing.attempt >= maxRetries) {
       return { status: "max_retries_reached" };
     }
+
+    // Pre-check guard: if there's a submitted hash and a pre-check function, verify
+    // transaction status before allowing retry (prevents blind resubmission)
+    if (existing.submittedHash && this.preCheck) {
+      const preCheckResult = await this.preCheck(existing.submittedHash);
+      if (preCheckResult === "found") {
+        // Transaction exists on-chain — do not retry, move to submitted for reconciliation
+        await this.store.updateIfStatus(id, existing.status, {
+          status: "submitted",
+          txHash: existing.submittedHash,
+          error: null,
+          completedAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        });
+        const updatedRecord = await this.store.get(id);
+        return { status: "submitted", execution: updatedRecord ?? undefined };
+      }
+      if (preCheckResult === "network_error") {
+        // Ambiguous — do not blind retry, preserve state
+        return { status: "ambiguous_submission", execution: existing };
+      }
+      // not_found — fall through to normal retry
+    }
+
     const now = new Date().toISOString();
     const updated = await this.store.updateIfStatus(id, existing.status, {
       status: "queued",
@@ -212,6 +246,7 @@ export class ExecutionQueue {
       await this.store.update(record.id, {
         status: result.status as ExecutionRecord["status"],
         txHash: result.txHash ?? null,
+        submittedHash: result.submittedHash ?? record.submittedHash ?? null,
         error: null,
         completedAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
@@ -235,11 +270,24 @@ export class ExecutionQueue {
     });
 
     // Decide whether to retry or move to dead_letter
-    const retryDecision = shouldRetryNow(record.id, attempt, classification, this.retryPolicy, this.nowFn);
-    if (retryDecision.shouldRetry) {
+    // Use pre-check enhanced decision if preCheck is available and submittedHash exists
+    let shouldRetry = false;
+    let nextRetryAt: string | null = null;
+
+    if (this.preCheck && record.submittedHash) {
+      const decision = await this.evaluateRetryWithPreCheck(record, attempt, classification);
+      shouldRetry = decision.shouldRetry;
+      nextRetryAt = decision.nextRetryAt;
+    } else {
+      const decision = shouldRetryNow(record.id, attempt, classification, this.retryPolicy, this.nowFn);
+      shouldRetry = decision.shouldRetry;
+      nextRetryAt = decision.nextRetryAt;
+    }
+
+    if (shouldRetry) {
       await this.store.update(record.id, {
         status: "failed",
-        nextRetryAt: retryDecision.nextRetryAt,
+        nextRetryAt,
       });
     } else {
       await this.store.update(record.id, {
@@ -250,8 +298,50 @@ export class ExecutionQueue {
     }
   }
 
-  private retryPolicy: RetryPolicy = DEFAULT_RETRY_POLICY;
-  private nowFn: () => Date = () => new Date();
+  /**
+   * Evaluate retry decision with Horizon pre-check for ambiguous submissions.
+   * Decision matrix:
+   * - submittedHash found on-chain → NO retry (transaction exists)
+   * - network_error / ambiguous → NO blind retry (preserve state)
+   * - definitive not_found → retry only if existing policy allows
+   */
+  private async evaluateRetryWithPreCheck(
+    record: ExecutionRecord,
+    attempt: number,
+    classification: string
+  ): Promise<{ shouldRetry: boolean; nextRetryAt: string | null }> {
+    const submittedHash = record.submittedHash;
+    if (!submittedHash || !this.preCheck) {
+      // Fall back to existing policy if no pre-check available
+      return shouldRetryNow(record.id, attempt, classification, this.retryPolicy, this.nowFn);
+    }
+
+    let preCheckResult: PreCheckResult;
+    try {
+      preCheckResult = await this.preCheck(submittedHash);
+    } catch {
+      // Pre-check itself failed — treat as ambiguous, do NOT blind retry
+      return { shouldRetry: false, nextRetryAt: null };
+    }
+
+    switch (preCheckResult) {
+      case "found":
+        // Transaction exists on-chain → do NOT retry, do NOT blind resubmit
+        return { shouldRetry: false, nextRetryAt: null };
+      case "network_error":
+        // Ambiguous network state → do NOT blind retry
+        return { shouldRetry: false, nextRetryAt: null };
+      case "not_found":
+        // Only definitive not_found allows retry under existing policy
+        if (classification === "permanent") {
+          return { shouldRetry: false, nextRetryAt: null };
+        }
+        if (attempt >= this.retryPolicy.maxRetries) {
+          return { shouldRetry: false, nextRetryAt: null };
+        }
+        return { shouldRetry: true, nextRetryAt: computeNextRetryAt(attempt, this.retryPolicy, new Date()) };
+    }
+  }
 }
 
 export interface ExecutionQueueOptions {
@@ -260,6 +350,8 @@ export interface ExecutionQueueOptions {
   clock?: () => Date;
   now?: () => Date;
   retryPolicy?: RetryPolicy;
+  /** Pre-check function to verify transaction status before blind retry */
+  preCheck?: PreCheckFn;
 }
 
 function classifyUncaughtError(error: unknown): "transient" | "permanent" {

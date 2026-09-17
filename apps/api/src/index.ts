@@ -199,14 +199,23 @@ export async function createApiServer(options: ServerOptions) {
     const pipelineExecutor = async (record: ExecutionRecord) => {
       const sourceAccount = await getSourceAccount();
       const outcome = await pipeline.execute({ intent: record.intent, sourceAccount });
+      const txHash = (outcome as { txHash?: string }).txHash;
       return {
         record,
         success: outcome.status === "submitted",
         status: outcome.status,
         error: outcome.message,
         errorClass: outcome.status === "rejected" ? "permanent" as const : "transient" as const,
-        txHash: (outcome as { txHash?: string }).txHash,
+        txHash,
+        submittedHash: txHash ?? null,
       };
+    };
+
+    const preCheck = async (txHash: string) => {
+      const status = await adapter.getTransactionStatus(txHash);
+      if (status === "confirmed" || status === "failed") return "found" as const;
+      if (status === "not_found") return "not_found" as const;
+      return "network_error" as const;
     };
 
     executionQueue =
@@ -214,6 +223,7 @@ export async function createApiServer(options: ServerOptions) {
       new ExecutionQueue(executionStore, pipelineExecutor, getSourceAccount, {
         intervalMs: options.executionQueue.intervalMs,
         concurrency: options.executionQueue.concurrency,
+        preCheck,
       });
 
     executionQueue.start();
@@ -267,6 +277,7 @@ export async function createApiServer(options: ServerOptions) {
               policyDecision: null,
               simulationResult: null,
               txHash: null,
+              submittedHash: null,
               error: null,
               attempt: 0,
               nextRetryAt: null,
@@ -953,6 +964,7 @@ export async function createApiServer(options: ServerOptions) {
         policyDecision: approval.policyDecision,
         simulationResult: null,
         txHash: null,
+        submittedHash: null,
         error: null,
         attempt: 0,
         nextRetryAt: null,

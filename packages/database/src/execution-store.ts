@@ -96,6 +96,7 @@ interface ExecutionRow {
   policy_decision_json: string | null;
   simulation_result_json: string | null;
   tx_hash: string | null;
+  submitted_hash: string | null;
   error: string | null;
   attempt: number;
   next_retry_at: string | null;
@@ -136,6 +137,7 @@ export class SQLiteExecutionStore implements ExecutionStore {
         policy_decision_json TEXT,
         simulation_result_json TEXT,
         tx_hash TEXT,
+        submitted_hash TEXT,
         error TEXT,
         attempt INTEGER NOT NULL DEFAULT 0,
         next_retry_at TEXT,
@@ -151,6 +153,11 @@ export class SQLiteExecutionStore implements ExecutionStore {
       CREATE INDEX IF NOT EXISTS idx_executions_status ON executions(status);
       CREATE INDEX IF NOT EXISTS idx_executions_next_retry ON executions(next_retry_at);
     `);
+    try {
+      this.db.exec(`ALTER TABLE executions ADD COLUMN submitted_hash TEXT`);
+    } catch {
+      // Column already exists (new schema or previously migrated).
+    }
   }
 
   async record(record: ExecutionRecord): Promise<void> {
@@ -158,11 +165,11 @@ export class SQLiteExecutionStore implements ExecutionStore {
       .prepare(
         `INSERT INTO executions
          (id, owner_id, agent_id, approval_id, activity_id, intent_json, status,
-          policy_decision_json, simulation_result_json, tx_hash, error, attempt,
+          policy_decision_json, simulation_result_json, tx_hash, submitted_hash, error, attempt,
           next_retry_at, started_at, completed_at, error_class, created_at, updated_at)
          VALUES
          (@id, @owner_id, @agent_id, @approval_id, @activity_id, @intent_json, @status,
-          @policy_decision_json, @simulation_result_json, @tx_hash, @error, @attempt,
+          @policy_decision_json, @simulation_result_json, @tx_hash, @submitted_hash, @error, @attempt,
           @next_retry_at, @started_at, @completed_at, @error_class, @created_at, @updated_at)`
       )
       .run({
@@ -176,6 +183,7 @@ export class SQLiteExecutionStore implements ExecutionStore {
         policy_decision_json: record.policyDecision ? JSON.stringify(record.policyDecision) : null,
         simulation_result_json: record.simulationResult ? JSON.stringify(record.simulationResult) : null,
         tx_hash: record.txHash,
+        submitted_hash: record.submittedHash ?? null,
         error: record.error,
         attempt: record.attempt,
         next_retry_at: record.nextRetryAt,
@@ -255,7 +263,8 @@ export class SQLiteExecutionStore implements ExecutionStore {
            owner_id = @owner_id, agent_id = @agent_id, approval_id = @approval_id,
            activity_id = @activity_id, intent_json = @intent_json, status = @status,
            policy_decision_json = @policy_decision_json, simulation_result_json = @simulation_result_json,
-           tx_hash = @tx_hash, error = @error, attempt = @attempt, next_retry_at = @next_retry_at,
+           tx_hash = @tx_hash, submitted_hash = @submitted_hash, error = @error, attempt = @attempt,
+           next_retry_at = @next_retry_at,
            started_at = @started_at, completed_at = @completed_at, error_class = @error_class,
            updated_at = @updated_at
          WHERE id = @id`
@@ -271,6 +280,7 @@ export class SQLiteExecutionStore implements ExecutionStore {
         policy_decision_json: updated.policyDecision ? JSON.stringify(updated.policyDecision) : null,
         simulation_result_json: updated.simulationResult ? JSON.stringify(updated.simulationResult) : null,
         tx_hash: updated.txHash,
+        submitted_hash: updated.submittedHash ?? null,
         error: updated.error,
         attempt: updated.attempt,
         next_retry_at: updated.nextRetryAt,
@@ -292,7 +302,8 @@ export class SQLiteExecutionStore implements ExecutionStore {
            owner_id = @owner_id, agent_id = @agent_id, approval_id = @approval_id,
            activity_id = @activity_id, intent_json = @intent_json, status = @status,
            policy_decision_json = @policy_decision_json, simulation_result_json = @simulation_result_json,
-           tx_hash = @tx_hash, error = @error, attempt = @attempt, next_retry_at = @next_retry_at,
+           tx_hash = @tx_hash, submitted_hash = @submitted_hash, error = @error, attempt = @attempt,
+           next_retry_at = @next_retry_at,
            started_at = @started_at, completed_at = @completed_at, error_class = @error_class,
            updated_at = @updated_at
          WHERE id = @id AND status = @expected_status`
@@ -308,6 +319,7 @@ export class SQLiteExecutionStore implements ExecutionStore {
         policy_decision_json: updated.policyDecision ? JSON.stringify(updated.policyDecision) : null,
         simulation_result_json: updated.simulationResult ? JSON.stringify(updated.simulationResult) : null,
         tx_hash: updated.txHash,
+        submitted_hash: updated.submittedHash ?? null,
         error: updated.error,
         attempt: updated.attempt,
         next_retry_at: updated.nextRetryAt,
@@ -343,6 +355,7 @@ function rowToExecutionRecord(r: ExecutionRow): ExecutionRecord {
     policyDecision: r.policy_decision_json ? JSON.parse(r.policy_decision_json) : null,
     simulationResult: r.simulation_result_json ? JSON.parse(r.simulation_result_json) : null,
     txHash: r.tx_hash,
+    submittedHash: r.submitted_hash,
     error: r.error,
     attempt: r.attempt,
     nextRetryAt: r.next_retry_at,
