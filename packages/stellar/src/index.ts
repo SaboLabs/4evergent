@@ -12,3 +12,7 @@ export type { TransactionStatusProvider, TransactionStatus, ReconciliationResult
 // Signer abstraction
 export type { Signer } from "./signer.js";
 export { TestnetLocalSigner } from "./testnet-local-signer.js";
+
+// Network safety guard (Phase 21)
+export { validateStellarNetwork, isLiveSubmitEnabled, TESTNET_HORIZON_URL, TESTNET_PASSPHRASE } from "./network-guard.js";
+export type { NetworkValidationResult } from "./network-guard.js";

@@ -2,66 +2,116 @@
 
 ## Prerequisites
 
-- Node.js >= 22 with pnpm
+- **Node.js >= 22** (required for `node:sqlite` built-in module)
+- **pnpm >= 9** (workspace package manager)
 - Rust toolchain (for Soroban contracts, Phase 3+)
 
-## Horizon endpoint
+## Full Testnet Execution Workflow
 
-Default testnet endpoint:
-
-```
-https://horizon-testnet.stellar.org
-```
-
-Set via environment:
+### 1. Install dependencies
 
 ```bash
-export STELLAR_HORIZON_URL=https://horizon-testnet.stellar.org
+pnpm install --frozen-lockfile
 ```
 
-## Generate & fund a testnet account
+### 2. Configure environment
 
 ```bash
-# 1. Generate a keypair (using the Stellar SDK)
-node -e "const {Keypair}=require('@stellar/stellar-sdk'); const k=Keypair.random(); console.log(k.publicKey()); console.log(k.secret()); "
+cp .env.example .env
+# Edit .env with your testnet credentials
+```
 
-# 2. Fund the public key via friendbot:
+### 3. Verify Horizon Testnet connectivity
+
+```bash
+# Run live smoke test (no secrets required, only reads Horizon root)
+npx tsx packages/stellar/test/live-smoke.ts
+```
+
+This verifies:
+- Horizon endpoint is reachable
+- Network passphrase matches Testnet
+- StellarSimulator can call real Horizon API (simulation gate works)
+
+### 4. Configure Testnet account
+
+```bash
+# Generate a testnet keypair
+node -e "const {Keypair}=require('@stellar/stellar-sdk'); const k=Keypair.random(); console.log('Public:', k.publicKey()); console.log('Secret:', k.secret());"
+
+# Fund the account via friendbot
 curl "https://friendbot.stellar.org?addr=<YOUR_PUBLIC_KEY>"
+
+# Set environment
+export STELLAR_TESTNET_SECRET_KEY=<YOUR_SECRET_KEY>
 ```
 
-## Set the testnet secret key
-
-The `TestnetLocalSigner` reads from the `STELLAR_TESTNET_SECRET_KEY` environment variable:
+### 5. Verify account funding
 
 ```bash
-export STELLAR_TESTNET_SECRET_KEY=S...  # your testnet secret key
+node -e "
+const {StellarAdapter} = require('./packages/agent-core/dist/index.js');
+const a = new StellarAdapter('https://horizon-testnet.stellar.org');
+a.getAccount('<YOUR_PUBLIC_KEY>').then(acc => {
+  console.log('Address:', acc.address);
+  console.log('Sequence:', acc.sequence);
+  console.log('Balances:', acc.balances);
+});
+"
 ```
 
-**WARNING:** Never commit this value. Never put it in `.env.example` or source code. Never log it. Never expose it through the API.
-
-## Verify connectivity
-
-The `StellarAdapter` in `packages/agent-core/src/stellar-adapter.ts` has a `getNetworkInfo()` method that queries Horizon. You can test it:
+### 6. Run tests (deterministic, no secrets required)
 
 ```bash
-cd packages/agent-core
-npx tsx -e "import { StellarAdapter } from './src/index.ts'; const a=new StellarAdapter('https://horizon-testnet.stellar.org'); console.log(await a.getNetworkInfo()); "
+pnpm test  # 195 tests PASS
 ```
 
-## Run the test suite
+### 7. Run simulation (no submission)
 
 ```bash
-pnpm test  # all packages (195 tests: shared 3, agent-core 11, policy 15, database 8, stellar 8, api 138, web 12)
+# Start API server (without LIVE_SUBMIT)
+pnpm --filter @4evergent/api start
+
+# Submit intent for simulation/approval
+curl -X POST http://localhost:3000/agents/<agent-id>/intents \
+  -H "Content-Type: application/json" \
+  -d '{"type":"payment","asset":"XLM","destination":"G...","amount":"0.001","reason":"test"}'
 ```
 
-A React web dashboard is included (`apps/web`). Start it with `pnpm --filter @4evergent/web dev` (API must be running on port 3000). The dashboard is a local development tool — read-only views of agents/activity/approvals and an XLM payment intent form. All signing and policy enforcement happen on the backend.
+Intent will be simulated against real Testnet Horizon. If policy allows and no approval required, it will be submitted ONLY if `LIVE_SUBMIT=1`.
 
-Integration tests run against in-memory HTTP servers with deterministic mocks. No live testnet calls are made by CI tests. The SQLite stores are tested with on-disk temp files under `os.tmpdir()` and verified to survive store reopen (restart simulation). Live testnet submission has NOT been performed in this phase.
+### 8. Enable live submission (explicit)
+
+```bash
+# Stop server, restart with LIVE_SUBMIT=1
+LIVE_SUBMIT=1 pnpm --filter @4evergent/api start
+```
+
+### 9. Execute Testnet transaction
+
+With `LIVE_SUBMIT=1`, intents that pass policy + simulation + approval will be signed and submitted to Testnet.
+
+### 10. Verify transaction status
+
+```bash
+curl http://localhost:3000/agents/<agent-id>/executions
+```
+
+Or check on [Stellar Expert](https://stellar.expert/explorer/testnet) with your txHash.
+
+## Live Smoke Test
+
+```bash
+# Without secrets — only verify network + simulation
+npx tsx packages/stellar/test/live-smoke.ts
+
+# With secrets + LIVE_SUBMIT — full pipeline with real transaction
+STELLAR_TESTNET_SECRET_KEY=S... LIVE_SUBMIT=1 npx tsx packages/stellar/test/live-smoke.ts
+```
 
 ## Testnet Local Signer
 
 `TestnetLocalSigner` (`packages/stellar/src/testnet-local-signer.ts`) is development infrastructure. It:
-
 - Loads a secret key from `STELLAR_TESTNET_SECRET_KEY`
 - Is testnet-only (the pipeline asserts the network passphrase matches)
 - Never exposes the secret key through any method
@@ -69,4 +119,19 @@ Integration tests run against in-memory HTTP servers with deterministic mocks. N
 - Is never returned through API responses
 - Is never logged
 
-It exists for controlled development/testing against the Stellar **testnet only**. It is NOT the final wallet architecture.
+## Safety Guards (Phase 21)
+
+- **Network validation**: Only Testnet URL + passphrase accepted. Mainnet explicitly rejected.
+- **Live submission gate**: `LIVE_SUBMIT=1` required. Default = disabled.
+- **Secret isolation**: Private key never in database, logs, API responses, error messages.
+- **Atomic claim**: `updateIfStatus(queued→executing)` CAS prevents concurrent execution.
+- **Idempotency**: `Idempotency-Key` header prevents duplicate financial execution.
+- **Pre-check**: Horizon lookup before blind retry prevents duplicate submission.
+
+## Known Limitations
+
+- Only Stellar Testnet supported. Mainnet execution not supported.
+- Exactly-once not guaranteed (Stellar classic limitation).
+- Single-process architecture (no distributed workers).
+- Production authentication not implemented.
+- No live transaction has been executed by CI. All tests use deterministic mocks.

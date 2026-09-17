@@ -67,13 +67,18 @@ Stellar is purpose-built for asset issuance and payments with native low-fee, fa
 ├── packages/
 │   ├── agent-core/       # Agent runtime, intent validation, Stellar adapter
 │   ├── policy/           # Deterministic authorization engine
-│   ├── stellar/          # Transaction construction + simulation + submission + reconciliation
+│   ├── stellar/          # Transaction construction + simulation + submission + reconciliation + network guard
 │   ├── database/         # In-memory + SQLite stores (activity, approvals, agents, executions)
 │   └── shared/           # Shared types & schemas
 ├── contracts/
 │   ├── agent-registry/   # Soroban contract (agent identity on-chain)
 │   └── permissions/      # Soroban authorization primitives
 ├── docs/
+│   ├── architecture.md
+│   ├── security-model.md
+│   ├── capabilities.md
+│   ├── roadmap.md
+│   └── testnet.md
 └── README.md
 ```
 
@@ -108,10 +113,10 @@ Key guarantees:
 git clone https://github.com/SaboLabs/4evergent
 cd 4evergent
 
-# install (Node 22+, pnpm 9+)
+# install (Node 22+, pnpm 9+, frozen lockfile for reproducible builds)
 pnpm install --frozen-lockfile
 
-# build all packages (bottom-up)
+# build all packages
 pnpm build
 
 # run tests
@@ -122,6 +127,22 @@ pnpm test
 
 - **Node.js >= 22** (required for `node:sqlite` built-in module)
 - **pnpm >= 9** (workspace package manager)
+
+### Run the API server (Testnet)
+
+```bash
+# Set required environment
+export STELLAR_TESTNET_SECRET_KEY=S...  # your testnet secret key
+
+# Build and start
+pnpm build
+pnpm --filter @4evergent/api start
+
+# Or run directly
+node apps/api/dist/server.js
+```
+
+The server starts on `http://localhost:3000`. See [docs/testnet.md](docs/testnet.md) for the full Testnet workflow including funding, simulation, and live submission (`LIVE_SUBMIT=1`).
 
 ### Run the dashboard
 
@@ -200,6 +221,7 @@ Schedules are stored in SQLite (when `dbPath` is configured) or in-memory. The s
 | 10 | Execution queue crash recovery | ✅ Shipped |
 | 11 | Agent self-serve creation | ✅ Shipped |
 | 12 | Trustline & non-XLM asset support | ✅ Shipped |
+| 13-18 | Reliability hardening (atomic claim, idempotency, ambiguous submission, pre-check, docs) | ✅ Shipped |
 
 ---
 

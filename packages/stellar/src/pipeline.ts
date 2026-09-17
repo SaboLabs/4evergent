@@ -170,7 +170,7 @@ export class TransactionPipeline {
     const preSubmitHash = signedTx.hash().toString("hex");
 
     try {
-      const result = await this.submitter.submit(signedTx);
+      const result = await this.submitter.submit(signedTx, this.signer.getNetworkPassphrase());
       const activity = createActivity(agentId, ownerId, intent, decision, idempotencyKey);
       activity.status = "submitted";
       activity.authorizationStatus = "approved";
@@ -323,7 +323,7 @@ export class TransactionPipeline {
     const preSubmitHash = signedTx.hash().toString("hex");
 
     try {
-      const result = await this.submitter.submit(signedTx);
+      const result = await this.submitter.submit(signedTx, this.signer.getNetworkPassphrase());
       await this.approvalStore.update(approvalId, { status: "submitted", txHash: result.hash, approvedAt: new Date().toISOString(), approver: approver ?? null });
       if (approval.activityId) {
         const existing = await this.activityStore.get(approval.activityId);
