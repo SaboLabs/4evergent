@@ -96,6 +96,7 @@ export class TransactionPipeline {
           status: "requires_approval",
           message: decision.reason,
           policyDecision: decision,
+          simulationResult: null,
           activityId: activity.id,
           approvalId: approval.id,
         };
@@ -104,6 +105,7 @@ export class TransactionPipeline {
         status: "requires_approval",
         message: decision.reason,
         policyDecision: decision,
+        simulationResult: null,
       };
     }
 
@@ -148,6 +150,11 @@ export class TransactionPipeline {
       };
     }
 
+    // PERSIST txHash BEFORE submit to survive crash window.
+    // If process crashes after submit but before we return, the txHash is already
+    // in the activity record so reconciliation can detect it.
+    const preSubmitHash = signedTx.hash().toString("hex");
+
     try {
       const result = await this.submitter.submit(signedTx);
       return {
@@ -159,12 +166,14 @@ export class TransactionPipeline {
         activityId: await this.recordActivity(agentId, ownerId, intent, decision, "submitted", "approved", null, result.hash, simResult),
       };
     } catch (e: any) {
+      // Submit failed — record pre-submit hash + error for recovery/reconciliation
       return {
         status: "rejected",
         message: `Submission failed: ${e.message}`,
         policyDecision: decision,
         simulationResult: simResult,
-        activityId: await this.recordActivity(agentId, ownerId, intent, decision, "failed", "submission_failed", e.message),
+        txHash: preSubmitHash,
+        activityId: await this.recordActivity(agentId, ownerId, intent, decision, "failed", "submission_failed", e.message, preSubmitHash, simResult),
       };
     }
   }
@@ -245,11 +254,7 @@ export class TransactionPipeline {
 
     let tx;
     try {
-      if (intent.type === "trustline") {
-        tx = await this.builder.buildTrustline(sourceAccount, intent as any, this.signer.getNetworkPassphrase());
-      } else {
-        tx = await this.builder.buildPayment(sourceAccount, intent as any, this.signer.getNetworkPassphrase());
-      }
+      tx = await this.builder.buildPayment(sourceAccount, intent as any, this.signer.getNetworkPassphrase());
     } catch (e: any) {
       await this.approvalStore.update(approvalId, { status: "failed", error: e.message });
       return {
@@ -287,6 +292,9 @@ export class TransactionPipeline {
       };
     }
 
+    // PERSIST txHash BEFORE submit to survive crash window
+    const preSubmitHash = signedTx.hash().toString("hex");
+
     try {
       const result = await this.submitter.submit(signedTx);
       await this.approvalStore.update(approvalId, { status: "submitted", txHash: result.hash, approvedAt: new Date().toISOString(), approver: approver ?? null });
@@ -311,6 +319,7 @@ export class TransactionPipeline {
         message: `Submission failed: ${e.message}`,
         policyDecision: { result: "deny", reason: "submission", rule: "approval", intent },
         simulationResult: simResult,
+        txHash: preSubmitHash,
         activityId: approval.activityId,
       };
     }
@@ -354,12 +363,15 @@ export type PipelineOutcome =
       message: string;
       policyDecision: PolicyDecision;
       simulationResult: SimulationLike;
+      txHash?: string | null;
       activityId?: string;
     }
   | {
       status: "requires_approval";
       message: string;
       policyDecision: PolicyDecision;
+      simulationResult?: SimulationLike | null;
+      txHash?: string | null;
       activityId?: string;
       approvalId?: string;
     }
@@ -368,6 +380,7 @@ export type PipelineOutcome =
       message: string;
       policyDecision: PolicyDecision;
       simulationResult: SimulationLike | null;
+      txHash?: string | null;
       activityId?: string;
     };
 

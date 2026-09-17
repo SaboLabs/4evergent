@@ -12,6 +12,8 @@ export interface RecoveryResult {
   recovered: number;
   /** IDs of executions that were recovered (for audit/debug). */
   recoveredIds: string[];
+  /** Number of executions skipped (e.g., txHash present — ambiguous submission). */
+  skipped: number;
   /** Errors encountered during recovery (record-level, non-fatal). */
   errors: Array<{ id: string; error: string }>;
 }
@@ -62,6 +64,7 @@ export class ExecutionRecoveryService {
       found: 0,
       recovered: 0,
       recoveredIds: [],
+      skipped: 0,
       errors: [],
     };
 
@@ -76,6 +79,17 @@ export class ExecutionRecoveryService {
           // longer "executing" (e.g., claimed by a concurrent worker), skip.
           const current = await this.store.get(record.id);
           if (!current || current.status !== "executing") continue;
+
+          // CONSERVATIVE RECOVERY:
+          // If txHash is present, the transaction may have been submitted to the
+          // network before crash. Do NOT blindly move to failed/retry — leave it
+          // for reconciliation to determine actual on-chain status.
+          // Only executions WITHOUT txHash are safe to recover immediately.
+          if (current.txHash) {
+            // Leave as executing; reconciliation will handle it
+            result.skipped++;
+            continue;
+          }
 
           await this.store.update(record.id, {
             status: "failed",
