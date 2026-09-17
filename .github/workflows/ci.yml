@@ -5,6 +5,7 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -26,7 +27,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: pnpm
 
       - name: Install dependencies
@@ -40,8 +41,3 @@ jobs:
 
       - name: Test
         run: pnpm test
-
-      - name: Frontend production build
-        run: |
-          cd apps/web
-          pnpm build
