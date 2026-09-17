@@ -40,6 +40,7 @@ export class SQLiteActivityStore implements ActivityStore {
         id TEXT PRIMARY KEY,
         agent_id TEXT NOT NULL,
         owner_id TEXT NOT NULL,
+        idempotency_key TEXT,
         intent_json TEXT NOT NULL,
         policy_decision_json TEXT NOT NULL,
         authorization_status TEXT,
@@ -54,6 +55,9 @@ export class SQLiteActivityStore implements ActivityStore {
       CREATE INDEX IF NOT EXISTS idx_activities_agent ON activities(agent_id);
       CREATE INDEX IF NOT EXISTS idx_activities_status ON activities(status);
       CREATE INDEX IF NOT EXISTS idx_activities_owner ON activities(owner_id);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_activities_idempotency
+        ON activities(owner_id, agent_id, idempotency_key)
+        WHERE idempotency_key IS NOT NULL;
     `);
   }
 
@@ -61,15 +65,16 @@ export class SQLiteActivityStore implements ActivityStore {
     this.db
       .prepare(
         `INSERT OR REPLACE INTO activities
-         (id, agent_id, owner_id, intent_json, policy_decision_json, authorization_status,
+         (id, agent_id, owner_id, idempotency_key, intent_json, policy_decision_json, authorization_status,
           simulation_result_json, tx_hash, status, error, created_at, updated_at)
-         VALUES (@id, @agent_id, @owner_id, @intent_json, @policy_decision_json, @authorization_status,
+         VALUES (@id, @agent_id, @owner_id, @idempotency_key, @intent_json, @policy_decision_json, @authorization_status,
                  @simulation_result_json, @tx_hash, @status, @error, @created_at, @updated_at)`
       )
       .run({
         id: record.id,
         agent_id: record.agentId,
         owner_id: record.ownerId,
+        idempotency_key: record.idempotencyKey ?? null,
         intent_json: JSON.stringify(record.intent),
         policy_decision_json: JSON.stringify(record.policyDecision),
         authorization_status: record.authorizationStatus,
@@ -125,6 +130,21 @@ export class SQLiteActivityStore implements ActivityStore {
       .prepare("SELECT * FROM activities WHERE id = ? AND owner_id = ?")
       .get(id, ownerId);
     return row ? rowToActivityRecord(row as unknown as ActivityRow) : null;
+  }
+
+  async getByIdempotencyKey(ownerId: string, agentId: string, key: string): Promise<ActivityRecord | null> {
+    const row = this.db
+      .prepare("SELECT * FROM activities WHERE owner_id = ? AND agent_id = ? AND idempotency_key = ?")
+      .get(ownerId, agentId, key);
+    return row ? rowToActivityRecord(row as unknown as ActivityRow) : null;
+  }
+
+  async recordIdempotent(key: string, record: ActivityRecord): Promise<{ record: ActivityRecord; created: boolean }> {
+    const existing = await this.getByIdempotencyKey(record.ownerId, record.agentId, key);
+    if (existing) return { record: existing, created: false };
+    record.idempotencyKey = key;
+    await this.record(record);
+    return { record, created: true };
   }
 
   async update(id: string, patch: Partial<ActivityRecord>): Promise<ActivityRecord | null> {
@@ -319,6 +339,7 @@ interface ActivityRow {
   id: string;
   agent_id: string;
   owner_id: string;
+  idempotency_key: string | null;
   intent_json: string;
   policy_decision_json: string;
   authorization_status: string | null;
@@ -355,6 +376,7 @@ function rowToActivityRecord(row: ActivityRow): ActivityRecord {
     id: row.id,
     agentId: row.agent_id,
     ownerId: row.owner_id,
+    idempotencyKey: row.idempotency_key,
     intent: JSON.parse(row.intent_json) as AgentIntent,
     policyDecision: JSON.parse(row.policy_decision_json) as PolicyDecision,
     authorizationStatus: row.authorization_status as AuthorizationStatus | null,

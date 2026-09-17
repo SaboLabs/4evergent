@@ -135,6 +135,8 @@ export interface ActivityRecord {
   id: string;
   agentId: string;
   ownerId: string;
+  /** Opaque client Idempotency-Key, scoped by owner+agent. Null when header omitted. */
+  idempotencyKey?: string | null;
   intent: AgentIntent;
   policyDecision: PolicyDecision;
   authorizationStatus: AuthorizationStatus | null;

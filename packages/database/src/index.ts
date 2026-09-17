@@ -24,6 +24,8 @@ export interface ActivityStore {
   listByOwner(ownerId: string, limit?: number): Promise<ActivityRecord[]>;
   getForOwner(id: string, ownerId: string): Promise<ActivityRecord | null>;
   update(id: string, patch: Partial<ActivityRecord>): Promise<ActivityRecord | null>;
+  getByIdempotencyKey(ownerId: string, agentId: string, key: string): Promise<ActivityRecord | null>;
+  recordIdempotent(key: string, record: ActivityRecord): Promise<{ record: ActivityRecord; created: boolean }>;
 }
 
 /**
@@ -133,6 +135,23 @@ export class InMemoryActivityStore implements ActivityStore {
     return rec?.ownerId === ownerId ? rec : null;
   }
 
+  async getByIdempotencyKey(ownerId: string, agentId: string, key: string): Promise<ActivityRecord | null> {
+    for (const rec of this.records.values()) {
+      if (rec.ownerId === ownerId && rec.agentId === agentId && rec.idempotencyKey === key) {
+        return rec;
+      }
+    }
+    return null;
+  }
+
+  async recordIdempotent(key: string, record: ActivityRecord): Promise<{ record: ActivityRecord; created: boolean }> {
+    const existing = await this.getByIdempotencyKey(record.ownerId, record.agentId, key);
+    if (existing) return { record: existing, created: false };
+    record.idempotencyKey = key;
+    this.records.set(record.id, record);
+    return { record, created: true };
+  }
+
   async update(id: string, patch: Partial<ActivityRecord>): Promise<ActivityRecord | null> {
     const existing = this.records.get(id);
     if (!existing) return null;
@@ -223,13 +242,15 @@ export function createActivity(
   agentId: string,
   ownerId: string,
   intent: AgentIntent,
-  policyDecision: PolicyDecision
+  policyDecision: PolicyDecision,
+  idempotencyKey?: string | null
 ): ActivityRecord {
   const now = new Date().toISOString();
   return {
     id: crypto.randomUUID(),
     agentId,
     ownerId,
+    idempotencyKey,
     intent,
     policyDecision,
     authorizationStatus: null,

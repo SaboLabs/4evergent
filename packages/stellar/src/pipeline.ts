@@ -5,7 +5,7 @@ import type { Signer } from "./signer.js";
 import { PolicyEngine } from "@4evergent/policy";
 import { IntentValidator } from "@4evergent/agent-core";
 import { StellarAdapter } from "@4evergent/agent-core";
-import type { AgentIntent, PolicyDecision, PolicyRules } from "@4evergent/shared";
+import type { AgentIntent, PolicyDecision, PolicyRules, ActivityRecord } from "@4evergent/shared";
 import {
   createActivity,
   createApproval,
@@ -26,6 +26,7 @@ export interface PipelineOptions {
 export interface PipelineExecuteInput {
   intent: AgentIntent;
   sourceAccount: any;
+  idempotencyKey?: string | null;
 }
 
 export class TransactionPipeline {
@@ -52,7 +53,7 @@ export class TransactionPipeline {
   }
 
   async execute(input: PipelineExecuteInput): Promise<PipelineOutcome> {
-    const { intent, sourceAccount } = input;
+    const { intent, sourceAccount, idempotencyKey } = input;
 
     const validation = IntentValidator.validate(intent);
     if (!validation.valid) {
@@ -69,11 +70,11 @@ export class TransactionPipeline {
     const decision = await this.policy.evaluate(intent, agentId);
 
     if (decision.result === "deny") {
-      const denied = createActivity(agentId, ownerId, intent, decision);
+      const denied = createActivity(agentId, ownerId, intent, decision, idempotencyKey);
       denied.status = "rejected";
       denied.authorizationStatus = "denied_by_policy";
       denied.error = decision.reason;
-      if (this.activityStore) await this.activityStore.record(denied);
+      if (this.activityStore) await this.persistActivity(denied, idempotencyKey);
       return {
         status: "rejected",
         message: `Policy denied: ${decision.reason}`,
@@ -85,12 +86,12 @@ export class TransactionPipeline {
 
     if (decision.result === "requires_approval") {
       if (this.activityStore && this.approvalStore) {
-        const activity = createActivity(agentId, ownerId, intent, decision);
+        const activity = createActivity(agentId, ownerId, intent, decision, idempotencyKey);
         activity.status = "requires_approval";
         activity.authorizationStatus = "pending_approval";
         const expiresAt = new Date(Date.now() + this.approvalTtlSeconds * 1000).toISOString();
         const approval = createApproval(activity.id, agentId, ownerId, intent, decision, expiresAt);
-        await this.activityStore.record(activity);
+        await this.persistActivity(activity, idempotencyKey);
         await this.approvalStore.record(approval);
         return {
           status: "requires_approval",
@@ -117,23 +118,32 @@ export class TransactionPipeline {
         tx = await this.builder.buildPayment(sourceAccount, intent as any, this.signer.getNetworkPassphrase());
       }
     } catch (e: any) {
+      const activity = createActivity(agentId, ownerId, intent, decision, idempotencyKey);
+      activity.status = "rejected";
+      activity.error = e.message;
+      await this.persistActivity(activity, idempotencyKey);
       return {
         status: "rejected",
         message: `Transaction construction failed: ${e.message}`,
         policyDecision: decision,
         simulationResult: null,
-        activityId: await this.recordActivity(agentId, ownerId, intent, decision, "rejected", null, e.message),
+        activityId: activity.id,
       };
     }
 
     const simResult = await this.simulator.simulate(tx);
     if (!simResult.success) {
+      const activity = createActivity(agentId, ownerId, intent, decision, idempotencyKey);
+      activity.status = "failed";
+      activity.authorizationStatus = "denied_by_simulation";
+      activity.error = simResult.error ?? "Simulation failed";
+      await this.persistActivity(activity, idempotencyKey);
       return {
         status: "simulation_failed",
         message: simResult.error ?? "Simulation failed",
         policyDecision: decision,
         simulationResult: simResult,
-        activityId: await this.recordActivity(agentId, ownerId, intent, decision, "failed", "denied_by_simulation", simResult.error ?? "Simulation failed"),
+        activityId: activity.id,
       };
     }
 
@@ -141,12 +151,16 @@ export class TransactionPipeline {
     try {
       signedTx = await this.signer.sign(tx);
     } catch (e: any) {
+      const activity = createActivity(agentId, ownerId, intent, decision, idempotencyKey);
+      activity.status = "failed";
+      activity.error = e.message;
+      await this.persistActivity(activity, idempotencyKey);
       return {
         status: "rejected",
         message: `Signing failed: ${e.message}`,
         policyDecision: decision,
         simulationResult: simResult,
-        activityId: await this.recordActivity(agentId, ownerId, intent, decision, "failed", "signing_failed", e.message),
+        activityId: activity.id,
       };
     }
 
@@ -157,23 +171,35 @@ export class TransactionPipeline {
 
     try {
       const result = await this.submitter.submit(signedTx);
+      const activity = createActivity(agentId, ownerId, intent, decision, idempotencyKey);
+      activity.status = "submitted";
+      activity.authorizationStatus = "approved";
+      activity.txHash = result.hash;
+      activity.simulationResult = simResult;
+      await this.persistActivity(activity, idempotencyKey);
       return {
         status: "submitted",
         message: `Transaction submitted: ${result.hash}`,
         policyDecision: decision,
         simulationResult: simResult,
         txHash: result.hash,
-        activityId: await this.recordActivity(agentId, ownerId, intent, decision, "submitted", "approved", null, result.hash, simResult),
+        activityId: activity.id,
       };
     } catch (e: any) {
       // Submit failed — record pre-submit hash + error for recovery/reconciliation
+      const activity = createActivity(agentId, ownerId, intent, decision, idempotencyKey);
+      activity.status = "failed";
+      activity.error = e.message;
+      activity.txHash = preSubmitHash;
+      activity.simulationResult = simResult;
+      await this.persistActivity(activity, idempotencyKey);
       return {
         status: "rejected",
         message: `Submission failed: ${e.message}`,
         policyDecision: decision,
         simulationResult: simResult,
         txHash: preSubmitHash,
-        activityId: await this.recordActivity(agentId, ownerId, intent, decision, "failed", "submission_failed", e.message, preSubmitHash, simResult),
+        activityId: activity.id,
       };
     }
   }
@@ -325,26 +351,23 @@ export class TransactionPipeline {
     }
   }
 
-  private async recordActivity(
-    agentId: string,
-    ownerId: string,
-    intent: AgentIntent,
-    policyDecision: PolicyDecision,
-    status: string,
-    authorizationStatus: string | null,
-    error: string | null,
-    txHash?: string,
-    simulationResult?: any
-  ): Promise<string | undefined> {
-    if (!this.activityStore) return undefined;
-    const activity = createActivity(agentId, ownerId, intent, policyDecision);
-    activity.status = status as any;
-    activity.authorizationStatus = authorizationStatus as any;
-    activity.error = error;
-    if (txHash) activity.txHash = txHash;
-    if (simulationResult) activity.simulationResult = simulationResult;
-    await this.activityStore.record(activity);
-    return activity.id;
+  private async persistActivity(record: ActivityRecord, idempotencyKey?: string | null): Promise<void> {
+    if (!this.activityStore) return;
+    if (idempotencyKey) {
+      const result = await this.activityStore.recordIdempotent(idempotencyKey, record);
+      if (!result.created) {
+        // Another request already reserved this key — merge the new state into existing
+        await this.activityStore.update(result.record.id, {
+          status: record.status,
+          authorizationStatus: record.authorizationStatus,
+          error: record.error,
+          txHash: record.txHash,
+          simulationResult: record.simulationResult,
+        });
+      }
+    } else {
+      await this.activityStore.record(record);
+    }
   }
 }
 

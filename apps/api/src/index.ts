@@ -810,18 +810,36 @@ export async function createApiServer(options: ServerOptions) {
     const canSubmit = await authorizationService.canSubmitIntent(requestCtx, agentId);
     if (!canSubmit) return json(res, { error: "not found" }, 404);
 
+    // Idempotency key from header (scoped to owner+agent)
+    const idempotencyKey = extractHeader(req, "Idempotency-Key");
+    if (idempotencyKey) {
+      // Enforce bounded key length to prevent abuse
+      if (idempotencyKey.length > 256) {
+        return json(res, { error: "Idempotency-Key must be 256 characters or fewer" }, 400);
+      }
+      const existing = await store.getByIdempotencyKey(requestCtx.ownerId, agentId, idempotencyKey);
+      if (existing) {
+        // Same key + different intent → conflict
+        const existingIntentJson = JSON.stringify(existing.intent);
+        const newIntentJson = JSON.stringify(intent);
+        if (existingIntentJson !== newIntentJson) {
+          return json(res, { error: "Idempotency-Key already used with a different intent" }, 409);
+        }
+        // Duplicate request → return existing activity (idempotent success)
+        return json(res, toIntentResponse(existing), 200);
+      }
+    }
+
     const decision = await policy.evaluate(intent, agentId);
 
     if (decision.result === "deny") {
-      // Pipeline creates the record and returns its id.
-      const outcome = await pipeline.execute({ intent, sourceAccount: { agentId, ownerId: requestCtx.ownerId } as any });
+      const outcome = await pipeline.execute({ intent, sourceAccount: { agentId, ownerId: requestCtx.ownerId } as any, idempotencyKey });
       const denied = outcome.activityId ? await store.get(outcome.activityId) : null;
       return json(res, toIntentResponse(denied!), 403);
     }
 
     if (decision.result === "requires_approval") {
-      // Delegate to pipeline — it persists activity + approval atomically.
-      const outcome = await pipeline.execute({ intent, sourceAccount: { agentId, ownerId: requestCtx.ownerId } as any });
+      const outcome = await pipeline.execute({ intent, sourceAccount: { agentId, ownerId: requestCtx.ownerId } as any, idempotencyKey });
       if (outcome.status === "requires_approval" && outcome.activityId) {
         const pending = await store.get(outcome.activityId);
         assertNoSecrets(pending!);
@@ -1092,6 +1110,13 @@ function readBody(req: any): Promise<string> {
     req.on("end", () => resolve(data));
     req.on("error", reject);
   });
+}
+
+function extractHeader(req: any, name: string): string | null {
+  const raw = req.headers?.[name.toLowerCase()];
+  if (Array.isArray(raw)) return raw[0] || null;
+  if (typeof raw === "string") return raw;
+  return null;
 }
 
 function extractAgentId(url: string | undefined): string | null {
