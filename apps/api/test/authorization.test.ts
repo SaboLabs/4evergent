@@ -6,6 +6,7 @@ beforeEach(() => {
 });
 import assert from "node:assert/strict";
 import { createApiServer } from "../src/index.js";
+import { DevAuthProvider } from "@4evergent/shared";
 import type { Signer } from "@4evergent/stellar";
 import type { PolicyRules } from "@4evergent/shared";
 import type { AddressInfo } from "node:net";
@@ -51,14 +52,14 @@ function makeAgent(id: string, ownerId: string, status = "active") {
   };
 }
 
-async function startServer(opts: { policyRules?: Partial<PolicyRules>; requestContext: { ownerId: string } }) {
+async function startServer(opts: { policyRules?: Partial<PolicyRules>; authProvider: DevAuthProvider }) {
   const server = await createApiServer({
     port: 0,
     horizonUrl: "https://horizon-testnet.stellar.org",
     signer: new MockSigner("test-agent"),
     policyRules: opts.policyRules ?? BASE_RULES,
     deferExecution: true,
-    requestContext: opts.requestContext,
+    authProvider: opts.authProvider,
   });
 
   return new Promise<{
@@ -95,7 +96,7 @@ async function post(baseUrl: string, path: string, body: unknown) {
 
 test("AUTHZ: owner A can see own agent", async () => {
   const { baseUrl, close, registerAgent } = await startServer({
-    requestContext: { ownerId: "owner-a" },
+    authProvider: new DevAuthProvider({ defaultOwnerId: "owner-a" }),
   });
   registerAgent(makeAgent("agent-a", "owner-a"));
   try {
@@ -110,7 +111,7 @@ test("AUTHZ: owner A can see own agent", async () => {
 
 test("AUTHZ: owner A cannot see owner B's agent", async () => {
   const { baseUrl, close, registerAgent } = await startServer({
-    requestContext: { ownerId: "owner-a" },
+    authProvider: new DevAuthProvider({ defaultOwnerId: "owner-a" }),
   });
   registerAgent(makeAgent("agent-b", "owner-b"));
   try {
@@ -124,7 +125,7 @@ test("AUTHZ: owner A cannot see owner B's agent", async () => {
 
 test("AUTHZ: owner A cannot access owner B's agent activity", async () => {
   const { baseUrl, close, registerAgent } = await startServer({
-    requestContext: { ownerId: "owner-a" },
+    authProvider: new DevAuthProvider({ defaultOwnerId: "owner-a" }),
   });
   registerAgent(makeAgent("agent-b", "owner-b"));
   try {
@@ -139,7 +140,7 @@ test("AUTHZ: owner A cannot access owner B's agent activity", async () => {
 
 test("AUTHZ: owner A can submit intent to own agent", async () => {
   const { baseUrl, close, registerAgent } = await startServer({
-    requestContext: { ownerId: "owner-a" },
+    authProvider: new DevAuthProvider({ defaultOwnerId: "owner-a" }),
   });
   registerAgent(makeAgent("agent-a", "owner-a"));
   try {
@@ -158,7 +159,7 @@ test("AUTHZ: owner A can submit intent to own agent", async () => {
 
 test("AUTHZ: owner A cannot submit intent to owner B's agent", async () => {
   const { baseUrl, close, registerAgent } = await startServer({
-    requestContext: { ownerId: "owner-a" },
+    authProvider: new DevAuthProvider({ defaultOwnerId: "owner-a" }),
   });
   registerAgent(makeAgent("agent-b", "owner-b"));
   try {
@@ -179,7 +180,7 @@ test("AUTHZ: owner A cannot submit intent to owner B's agent", async () => {
 
 test("AUTHZ: activity list does not cross owners", async () => {
   const { baseUrl, close, registerAgent } = await startServer({
-    requestContext: { ownerId: "owner-a" },
+    authProvider: new DevAuthProvider({ defaultOwnerId: "owner-a" }),
   });
   registerAgent(makeAgent("agent-a", "owner-a"));
   registerAgent(makeAgent("agent-b", "owner-b"));
@@ -212,7 +213,7 @@ test("AUTHZ: activity list does not cross owners", async () => {
 
 test("AUTHZ: owner A can see own approval", async () => {
   const { baseUrl, close, registerAgent } = await startServer({
-    requestContext: { ownerId: "owner-a" },
+    authProvider: new DevAuthProvider({ defaultOwnerId: "owner-a" }),
   });
   registerAgent(makeAgent("agent-a", "owner-a"));
 
@@ -236,7 +237,7 @@ test("AUTHZ: owner A can see own approval", async () => {
 
 test("AUTHZ: owner A cannot see owner B's approval", async () => {
   const { baseUrl, close, registerAgent } = await startServer({
-    requestContext: { ownerId: "owner-a" },
+    authProvider: new DevAuthProvider({ defaultOwnerId: "owner-a" }),
   });
   registerAgent(makeAgent("agent-b", "owner-b"));
 
@@ -251,7 +252,7 @@ test("AUTHZ: owner A cannot see owner B's approval", async () => {
 
 test("AUTHZ: owner A cannot approve owner B's approval", async () => {
   // Setup: create a server for owner-b to create an approval
-  const serverB = await startServer({ requestContext: { ownerId: "owner-b" } });
+  const serverB = await startServer({ authProvider: new DevAuthProvider({ defaultOwnerId: "owner-b" }) });
   serverB.registerAgent(makeAgent("agent-b", "owner-b"));
 
   const intentRes = await post(serverB.baseUrl, "/agents/agent-b/intents", {
@@ -274,7 +275,7 @@ test("AUTHZ: owner A cannot approve owner B's approval", async () => {
   await serverB.close();
 
   // Create a new server for owner-a with the same agent registered
-  const serverA = await startServer({ requestContext: { ownerId: "owner-a" } });
+  const serverA = await startServer({ authProvider: new DevAuthProvider({ defaultOwnerId: "owner-a" }) });
   serverA.registerAgent(makeAgent("agent-b", "owner-b"));
 
   try {
@@ -288,7 +289,7 @@ test("AUTHZ: owner A cannot approve owner B's approval", async () => {
 
 test("AUTHZ: unauthorized approve does not mutate approval state", async () => {
   // This test verifies that a failed authorization check does not change the approval status.
-  const serverA = await startServer({ requestContext: { ownerId: "owner-a" } });
+  const serverA = await startServer({ authProvider: new DevAuthProvider({ defaultOwnerId: "owner-a" }) });
   serverA.registerAgent(makeAgent("agent-a", "owner-a"));
 
   const intentRes = await post(serverA.baseUrl, "/agents/agent-a/intents", {
@@ -319,7 +320,7 @@ test("AUTHZ: unauthorized approve does not mutate approval state", async () => {
 
 test("AUTHZ: client cannot spoof ownerId via request body", async () => {
   const { baseUrl, close, registerAgent } = await startServer({
-    requestContext: { ownerId: "owner-a" },
+    authProvider: new DevAuthProvider({ defaultOwnerId: "owner-a" }),
   });
   registerAgent(makeAgent("agent-a", "owner-a"));
 

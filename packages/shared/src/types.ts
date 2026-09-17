@@ -1,3 +1,5 @@
+import type { AuthenticatedPrincipal } from "./auth.js";
+
 export type Network = "testnet" | "mainnet";
 
 export interface PolicyRules {
@@ -36,7 +38,10 @@ export interface Agent extends CreateAgentInput {
 }
 
 export interface RequestContext {
-  ownerId: string;
+  /** Authenticated principal (null for unauthenticated requests). */
+  principal: AuthenticatedPrincipal | null;
+  /** Denormalized ownerId for convenience. Null when unauthenticated. */
+  ownerId: string | null;
 }
 
 export interface AuthorizationService {

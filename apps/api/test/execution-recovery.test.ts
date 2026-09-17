@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createApiServer } from "../src/index.js";
+import { DevAuthProvider } from "@4evergent/shared";
 import { InMemoryExecutionStore, InMemoryActivityStore, InMemoryApprovalStore, InMemoryScheduleStore, InMemoryAgentStore } from "@4evergent/database";
 import type { ExecutionRecord } from "@4evergent/database";
 
@@ -49,7 +50,7 @@ async function startServer() {
     scheduleStore,
     executionStore,
     agentStore,
-    requestContext: { ownerId: "owner-a" },
+    authProvider: new DevAuthProvider({ defaultOwnerId: "owner-a" }),
     executionQueue: { enabled: true, intervalMs: 60000 },
   });
 

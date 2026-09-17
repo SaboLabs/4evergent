@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createApiServer } from "../src/index.js";
+import { DevAuthProvider } from "@4evergent/shared";
 import type { Signer } from "@4evergent/stellar";
 
 /**
@@ -27,7 +28,7 @@ async function startServer(opts?: { signer?: Signer }) {
     port: 0,
     horizonUrl: "https://horizon-testnet.stellar.org",
     signer,
-    requestContext: { ownerId: "test" },
+    authProvider: new DevAuthProvider({ defaultOwnerId: "test" }),
   });
   await server.listen(0);
   const baseUrl = `http://127.0.0.1:${(server.server.address() as any).port}`;

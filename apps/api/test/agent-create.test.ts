@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createApiServer } from "../src/index.js";
+import { DevAuthProvider } from "@4evergent/shared";
 import type { Agent } from "@4evergent/shared";
 
 async function post(url: string, body: unknown): Promise<{ status: number; body: any }> {
@@ -26,7 +27,7 @@ test("POST /agents happy path", async () => {
     port: 0,
     horizonUrl: "https://horizon-testnet.stellar.org",
     signer: makeSigner("GTEST"),
-    requestContext: { ownerId: "owner-a" },
+    authProvider: new DevAuthProvider({ defaultOwnerId: "owner-a" }),
   });
   await server.listen(0);
   const baseUrl = `http://127.0.0.1:${(server.server.address() as any).port}`;
@@ -54,7 +55,7 @@ test("POST /agents minimal — only displayName required", async () => {
     port: 0,
     horizonUrl: "https://horizon-testnet.stellar.org",
     signer: makeSigner("GTEST"),
-    requestContext: { ownerId: "owner-a" },
+    authProvider: new DevAuthProvider({ defaultOwnerId: "owner-a" }),
   });
   await server.listen(0);
   const baseUrl = `http://127.0.0.1:${(server.server.address() as any).port}`;
@@ -75,7 +76,7 @@ test("POST /agents validation — missing displayName", async () => {
     port: 0,
     horizonUrl: "https://horizon-testnet.stellar.org",
     signer: makeSigner("GTEST"),
-    requestContext: { ownerId: "owner-a" },
+    authProvider: new DevAuthProvider({ defaultOwnerId: "owner-a" }),
   });
   await server.listen(0);
   const baseUrl = `http://127.0.0.1:${(server.server.address() as any).port}`;
@@ -93,7 +94,7 @@ test("POST /agents validation — empty displayName", async () => {
     port: 0,
     horizonUrl: "https://horizon-testnet.stellar.org",
     signer: makeSigner("GTEST"),
-    requestContext: { ownerId: "owner-a" },
+    authProvider: new DevAuthProvider({ defaultOwnerId: "owner-a" }),
   });
   await server.listen(0);
   const baseUrl = `http://127.0.0.1:${(server.server.address() as any).port}`;
@@ -111,7 +112,7 @@ test("POST /agents validation — displayName too long", async () => {
     port: 0,
     horizonUrl: "https://horizon-testnet.stellar.org",
     signer: makeSigner("GTEST"),
-    requestContext: { ownerId: "owner-a" },
+    authProvider: new DevAuthProvider({ defaultOwnerId: "owner-a" }),
   });
   await server.listen(0);
   const baseUrl = `http://127.0.0.1:${(server.server.address() as any).port}`;
@@ -129,7 +130,7 @@ test("POST /agents validation — invalid capabilities", async () => {
     port: 0,
     horizonUrl: "https://horizon-testnet.stellar.org",
     signer: makeSigner("GTEST"),
-    requestContext: { ownerId: "owner-a" },
+    authProvider: new DevAuthProvider({ defaultOwnerId: "owner-a" }),
   });
   await server.listen(0);
   const baseUrl = `http://127.0.0.1:${(server.server.address() as any).port}`;
@@ -147,7 +148,7 @@ test("POST /agents validation — invalid stellarAddress", async () => {
     port: 0,
     horizonUrl: "https://horizon-testnet.stellar.org",
     signer: makeSigner("GTEST"),
-    requestContext: { ownerId: "owner-a" },
+    authProvider: new DevAuthProvider({ defaultOwnerId: "owner-a" }),
   });
   await server.listen(0);
   const baseUrl = `http://127.0.0.1:${(server.server.address() as any).port}`;
@@ -165,7 +166,7 @@ test("POST /agents owner isolation — agent belongs to requesting owner", async
     port: 0,
     horizonUrl: "https://horizon-testnet.stellar.org",
     signer: makeSigner("GTEST"),
-    requestContext: { ownerId: "owner-a" },
+    authProvider: new DevAuthProvider({ defaultOwnerId: "owner-a" }),
   });
   await server.listen(0);
   const baseUrl = `http://127.0.0.1:${(server.server.address() as any).port}`;
@@ -189,7 +190,7 @@ test("POST /agents cross-owner — cannot see other owner's agents", async () =>
     port: 0,
     horizonUrl: "https://horizon-testnet.stellar.org",
     signer: makeSigner("GTEST"),
-    requestContext: { ownerId: "owner-a" },
+    authProvider: new DevAuthProvider({ defaultOwnerId: "owner-a" }),
   });
   await serverA.listen(0);
   const baseUrlA = `http://127.0.0.1:${(serverA.server.address() as any).port}`;
@@ -198,7 +199,7 @@ test("POST /agents cross-owner — cannot see other owner's agents", async () =>
     port: 0,
     horizonUrl: "https://horizon-testnet.stellar.org",
     signer: makeSigner("GTEST"),
-    requestContext: { ownerId: "owner-b" },
+    authProvider: new DevAuthProvider({ defaultOwnerId: "owner-b" }),
   });
   await serverB.listen(0);
   const baseUrlB = `http://127.0.0.1:${(serverB.server.address() as any).port}`;
@@ -225,7 +226,7 @@ test("POST /agents created agent can be used for intent submission", async () =>
     port: 0,
     horizonUrl: "https://horizon-testnet.stellar.org",
     signer: makeSigner("GTEST"),
-    requestContext: { ownerId: "owner-a" },
+    authProvider: new DevAuthProvider({ defaultOwnerId: "owner-a" }),
     deferExecution: true,
   });
   await server.listen(0);

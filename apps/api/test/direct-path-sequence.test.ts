@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createApiServer } from "../src/index.js";
+import { DevAuthProvider } from "@4evergent/shared";
 import type { Signer } from "@4evergent/stellar";
 
 /**
@@ -44,7 +45,7 @@ async function startServer(opts?: { signer?: Signer; ownerId?: string }) {
     port: 0,
     horizonUrl: "https://horizon-testnet.stellar.org",
     signer,
-    requestContext: { ownerId },
+    authProvider: new DevAuthProvider({ defaultOwnerId: ownerId }),
   });
   server.registerAgent(makeAgent("test-agent", ownerId));
 

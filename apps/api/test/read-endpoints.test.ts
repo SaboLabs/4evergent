@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createApiServer } from "../src/index.js";
+import { DevAuthProvider } from "@4evergent/shared";
 import type { Signer } from "@4evergent/stellar";
 import type { PolicyRules } from "@4evergent/shared";
 import type { AddressInfo } from "node:net";
@@ -46,7 +47,7 @@ async function startServer(opts?: { policyRules?: Partial<PolicyRules>; register
     signer: new MockSigner("test-agent"),
     policyRules: opts?.policyRules,
     deferExecution: true,
-    requestContext: { ownerId: "test" },
+    authProvider: new DevAuthProvider({ defaultOwnerId: "test" }),
   });
   if (opts?.registerAgent !== false) {
     server.registerAgent(TEST_AGENT);

@@ -5,6 +5,7 @@ import type { Signer } from "@4evergent/stellar";
 import type { PolicyRules } from "@4evergent/shared";
 import type { AddressInfo } from "node:net";
 import { createApiServer } from "../src/index.js";
+import { DevAuthProvider } from "@4evergent/shared";
 
 // NOTE: approval integration tests must not call the live Horizon network.
 // We test only the persistence + state-machine + idempotency behavior.
@@ -48,7 +49,7 @@ async function startServer(opts?: { policyRules?: Partial<PolicyRules>; signer?:
     signer,
     policyRules: opts?.policyRules,
     deferExecution: opts?.deferExecution,
-    requestContext: { ownerId: "test" },
+    authProvider: new DevAuthProvider({ defaultOwnerId: "test" }),
   });
   server.registerAgent(TEST_AGENT);
 
@@ -143,7 +144,7 @@ test("approval: approve valid approval → 200 approved (async execution)", asyn
     const approval = await approvals.get(intentRes.body.approvalId);
     assert.ok(approval);
     assert.equal(approval!.status, "approved");
-    assert.equal(approval!.approver, "tester");
+    assert.equal(approval!.approver, "dev-user");
     assert.ok(approval!.approvedAt);
   } finally {
     await close();

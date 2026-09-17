@@ -1,18 +1,27 @@
 import type { RequestContext, AuthorizationService } from '@4evergent/shared';
-import type { ActivityStore, ApprovalStore, ScheduleStore } from './index.js';
+import type { ActivityStore, ApprovalStore, ScheduleStore, AgentStore } from './index.js';
 
 export interface AuthorizationContext {
   activityStore: ActivityStore;
   approvalStore: ApprovalStore;
   scheduleStore: ScheduleStore;
   agents: Map<string, { id: string; ownerId: string }>;
+  /**
+   * Optional agent store for fallback lookups.
+   *
+   * PHASE 28I: When an agent is not found in the in-memory map (e.g., after
+   * server restart with persistent storage), the service falls back to
+   * looking up the agent from the store. This prevents authorization bypass
+   * for agents created in previous sessions.
+   */
+  agentStore?: AgentStore;
 }
 
 export class ResourceAuthorizationService implements AuthorizationService {
   constructor(private ctx: AuthorizationContext) {}
 
   async canAccessAgent(ctx: RequestContext, agentId: string): Promise<boolean> {
-    const agent = this.ctx.agents.get(agentId);
+    const agent = await this.resolveAgent(agentId);
     return agent?.ownerId === ctx.ownerId;
   }
 
@@ -72,5 +81,28 @@ export class ResourceAuthorizationService implements AuthorizationService {
 
   async canDisableSchedule(ctx: RequestContext, scheduleId: string): Promise<boolean> {
     return this.canAccessSchedule(ctx, scheduleId);
+  }
+
+  /**
+   * Resolve agent by ID with fallback to agent store.
+   *
+   * First checks the in-memory map (fast path). If not found, falls back
+   * to the configured agent store (if any) for persistent agents.
+   */
+  private async resolveAgent(agentId: string): Promise<{ id: string; ownerId: string } | null> {
+    const cached = this.ctx.agents.get(agentId);
+    if (cached) return cached;
+
+    if (this.ctx.agentStore) {
+      const dbAgent = await this.ctx.agentStore.get(agentId);
+      if (dbAgent) {
+        const entry = { id: dbAgent.id, ownerId: dbAgent.ownerId };
+        // Cache for subsequent lookups
+        this.ctx.agents.set(agentId, entry);
+        return entry;
+      }
+    }
+
+    return null;
   }
 }
