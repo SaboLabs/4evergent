@@ -138,6 +138,18 @@ export const api = {
   getQueueStatus: () =>
     request<QueueSummary>('/agent-queue'),
 
+  retryExecution: (executionId: string) =>
+    request<{ execution: ExecutionRecord; message: string }>(
+      `/executions/${encodeURIComponent(executionId)}/retry`,
+      { method: 'POST', body: JSON.stringify({}) }
+    ),
+
+  cancelExecution: (executionId: string) =>
+    request<{ execution: ExecutionRecord; message: string }>(
+      `/executions/${encodeURIComponent(executionId)}/cancel`,
+      { method: 'POST', body: JSON.stringify({}) }
+    ),
+
   // ===== Schedules =====
 
   listSchedules: (agentId: string, limit = 50) =>

@@ -1,5 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
-import type { ExecutionStore, ExecutionRecord } from "./execution-types.js";
+import type { ExecutionStore, ExecutionRecord, ExecutionStatus } from "./execution-types.js";
 
 const MAX_LIMIT = 200;
 
@@ -60,6 +60,14 @@ export class InMemoryExecutionStore implements ExecutionStore {
   async update(id: string, patch: Partial<ExecutionRecord>): Promise<ExecutionRecord | null> {
     const existing = this.records.get(id);
     if (!existing) return null;
+    const updated: ExecutionRecord = { ...existing, ...patch, id: existing.id };
+    this.records.set(id, updated);
+    return updated;
+  }
+
+  async updateIfStatus(id: string, expectedStatus: ExecutionStatus, patch: Partial<ExecutionRecord>): Promise<ExecutionRecord | null> {
+    const existing = this.records.get(id);
+    if (!existing || existing.status !== expectedStatus) return null;
     const updated: ExecutionRecord = { ...existing, ...patch, id: existing.id };
     this.records.set(id, updated);
     return updated;
@@ -256,6 +264,44 @@ export class SQLiteExecutionStore implements ExecutionStore {
         error_class: updated.errorClass,
         updated_at: updated.updatedAt,
       });
+    return updated;
+  }
+
+  async updateIfStatus(id: string, expectedStatus: ExecutionStatus, patch: Partial<ExecutionRecord>): Promise<ExecutionRecord | null> {
+    const existing = await this.get(id);
+    if (!existing || existing.status !== expectedStatus) return null;
+    const updated: ExecutionRecord = { ...existing, ...patch, id: existing.id };
+    this.db
+      .prepare(
+        `UPDATE executions SET
+           owner_id = @owner_id, agent_id = @agent_id, approval_id = @approval_id,
+           activity_id = @activity_id, intent_json = @intent_json, status = @status,
+           policy_decision_json = @policy_decision_json, simulation_result_json = @simulation_result_json,
+           tx_hash = @tx_hash, error = @error, attempt = @attempt, next_retry_at = @next_retry_at,
+           started_at = @started_at, completed_at = @completed_at, error_class = @error_class,
+           updated_at = @updated_at
+         WHERE id = @id AND status = @expected_status`
+      )
+      .run({
+        id: updated.id,
+        owner_id: updated.ownerId,
+        agent_id: updated.agentId,
+        approval_id: updated.approvalId,
+        activity_id: updated.activityId,
+        intent_json: JSON.stringify(updated.intent),
+        status: updated.status,
+        policy_decision_json: updated.policyDecision ? JSON.stringify(updated.policyDecision) : null,
+        simulation_result_json: updated.simulationResult ? JSON.stringify(updated.simulationResult) : null,
+        tx_hash: updated.txHash,
+        error: updated.error,
+        attempt: updated.attempt,
+        next_retry_at: updated.nextRetryAt,
+        started_at: updated.startedAt,
+        completed_at: updated.completedAt,
+        error_class: updated.errorClass,
+        updated_at: updated.updatedAt,
+        expected_status: expectedStatus,
+      } as any);
     return updated;
   }
 

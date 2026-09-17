@@ -60,5 +60,6 @@ export interface ExecutionStore {
   listByAgent(agentId: string, limit?: number): Promise<ExecutionRecord[]>;
   listStuckExecuting(limit?: number): Promise<ExecutionRecord[]>;
   update(id: string, patch: Partial<ExecutionRecord>): Promise<ExecutionRecord | null>;
+  updateIfStatus(id: string, expectedStatus: ExecutionStatus, patch: Partial<ExecutionRecord>): Promise<ExecutionRecord | null>;
   delete(id: string): Promise<boolean>;
 }

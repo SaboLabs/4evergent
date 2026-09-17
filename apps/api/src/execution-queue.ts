@@ -103,6 +103,54 @@ export class ExecutionQueue {
     return started;
   }
 
+  /**
+   * Manual retry — transitions failed/dead_letter back to queued.
+   * Uses atomic conditional update to prevent race with worker.
+   */
+  async retry(id: string, maxRetries: number): Promise<{ status: string; execution?: ExecutionRecord }> {
+    const existing = await this.store.get(id);
+    if (!existing) return { status: "not_found" };
+    if (existing.status !== "failed" && existing.status !== "dead_letter") {
+      return { status: "invalid_state" };
+    }
+    if (existing.attempt >= maxRetries) {
+      return { status: "max_retries_reached" };
+    }
+    const now = new Date().toISOString();
+    const updated = await this.store.updateIfStatus(id, existing.status, {
+      status: "queued",
+      nextRetryAt: null,
+      error: null,
+      startedAt: null,
+      updatedAt: now,
+    });
+    if (!updated) return { status: "conflict" };
+    return { status: "queued", execution: updated };
+  }
+
+  /**
+   * Manual cancellation — transitions queued/executing to dead_letter.
+   * Uses atomic conditional update to prevent race with worker.
+   */
+  async cancel(id: string): Promise<{ status: string; execution?: ExecutionRecord }> {
+    const existing = await this.store.get(id);
+    if (!existing) return { status: "not_found" };
+    if (existing.status !== "queued" && existing.status !== "executing") {
+      return { status: "invalid_state" };
+    }
+    const now = new Date().toISOString();
+    const updated = await this.store.updateIfStatus(id, existing.status, {
+      status: "dead_letter",
+      nextRetryAt: null,
+      startedAt: null,
+      completedAt: now,
+      error: "cancelled by user",
+      updatedAt: now,
+    });
+    if (!updated) return { status: "conflict" };
+    return { status: "cancelled", execution: updated };
+  }
+
   private async tick(): Promise<void> {
     if (!this.running) return;
 

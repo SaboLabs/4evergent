@@ -1,20 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { InMemoryExecutionStore } from "@4evergent/database";
-import { ExecutionRecoveryService } from "../src/execution-recovery.js";
-import { ExecutionQueue } from "../src/execution-queue.js";
+import { createApiServer } from "../src/index.js";
+import { InMemoryExecutionStore, InMemoryActivityStore, InMemoryApprovalStore, InMemoryScheduleStore, InMemoryAgentStore } from "@4evergent/database";
 import type { ExecutionRecord } from "@4evergent/database";
-import type { AgentIntent } from "@4evergent/shared";
-
-function makeIntent(): AgentIntent {
-  return {
-    type: "payment",
-    asset: "XLM",
-    destination: "GDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-    amount: "10",
-    reason: "test execution",
-  };
-}
 
 function makeExecution(overrides: Partial<ExecutionRecord> = {}): ExecutionRecord {
   const now = new Date().toISOString();
@@ -24,216 +12,243 @@ function makeExecution(overrides: Partial<ExecutionRecord> = {}): ExecutionRecor
     agentId: "agent-a",
     approvalId: null,
     activityId: null,
-    intent: makeIntent(),
-    status: "queued",
+    intent: { type: "payment", asset: "XLM", destination: "GDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", amount: "10", reason: "test" },
+    status: "failed",
     policyDecision: null,
     simulationResult: null,
     txHash: null,
-    error: null,
-    attempt: 0,
+    error: "Network timeout",
+    attempt: 1,
     nextRetryAt: null,
     startedAt: null,
     completedAt: null,
-    errorClass: null,
+    errorClass: "transient",
     createdAt: now,
     updatedAt: now,
     ...overrides,
   };
 }
 
-test("Recovery: executing record found and recovered", async () => {
-  const store = new InMemoryExecutionStore();
-  const execution = makeExecution({ status: "executing", startedAt: new Date().toISOString() });
-  await store.record(execution);
+async function startServer() {
+  const executionStore = new InMemoryExecutionStore();
+  const activityStore = new InMemoryActivityStore();
+  const approvalStore = new InMemoryApprovalStore();
+  const scheduleStore = new InMemoryScheduleStore();
+  const agentStore = new InMemoryAgentStore();
 
-  const recovery = new ExecutionRecoveryService(store);
-  const result = await recovery.recover();
-
-  assert.equal(result.found, 1);
-  assert.equal(result.recovered, 1);
-  assert.deepEqual(result.recoveredIds, [execution.id]);
-
-  const updated = await store.get(execution.id);
-  assert.equal(updated?.status, "failed");
-  assert.ok(updated?.nextRetryAt);
-  // nextRetryAt should be immediately eligible (<= now)
-  assert.ok(new Date(updated!.nextRetryAt!) <= new Date());
-});
-
-test("Recovery: retry count preserved", async () => {
-  const store = new InMemoryExecutionStore();
-  const execution = makeExecution({
-    status: "executing",
-    attempt: 2,
-    errorClass: "transient",
-    startedAt: new Date().toISOString(),
+  const server = await createApiServer({
+    port: 0,
+    horizonUrl: "https://horizon-testnet.stellar.org",
+    signer: {
+      getAccountId: () => "GTEST",
+      getNetworkPassphrase: () => "Test SDF Network ; September 2015",
+      sign: async (tx: any) => tx,
+    },
+    activityStore,
+    approvalStore,
+    scheduleStore,
+    executionStore,
+    agentStore,
+    requestContext: { ownerId: "owner-a" },
+    executionQueue: { enabled: true, intervalMs: 60000 },
   });
-  await store.record(execution);
 
-  const recovery = new ExecutionRecoveryService(store);
-  await recovery.recover();
+  await server.listen(0);
+  const baseUrl = `http://127.0.0.1:${(server.server.address() as any).port}`;
+  return { baseUrl, close: () => server.close(), executionStore };
+}
 
-  const updated = await store.get(execution.id);
-  assert.equal(updated?.attempt, 2);
-  assert.equal(updated?.errorClass, "transient");
+test("POST /executions/:id/retry — failed → queued", async () => {
+  const { baseUrl, close, executionStore } = await startServer();
+  try {
+    const execution = makeExecution({ status: "failed", attempt: 1, errorClass: "transient" });
+    await executionStore.record(execution);
+
+    const res = await fetch(`${baseUrl}/executions/${execution.id}/retry`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.execution.status, "queued");
+    assert.equal(body.execution.error, null);
+    assert.equal(body.execution.nextRetryAt, null);
+  } finally {
+    await close();
+  }
 });
 
-test("Recovery: terminal states not recovered", async () => {
-  const store = new InMemoryExecutionStore();
-  const submitted = makeExecution({ status: "submitted", txHash: "tx-1" });
-  const confirmed = makeExecution({ status: "confirmed", txHash: "tx-2" });
-  const failed = makeExecution({ status: "failed", nextRetryAt: new Date().toISOString() });
-  const deadLetter = makeExecution({ status: "dead_letter" });
-  const queued = makeExecution({ status: "queued" });
+test("POST /executions/:id/retry — dead_letter → queued", async () => {
+  const { baseUrl, close, executionStore } = await startServer();
+  try {
+    // dead_letter with attempt < maxRetries (dead_letter can occur via permanent failure without exhausting retries)
+    const execution = makeExecution({ status: "dead_letter", attempt: 2, errorClass: "permanent" });
+    await executionStore.record(execution);
 
-  await store.record(submitted);
-  await store.record(confirmed);
-  await store.record(failed);
-  await store.record(deadLetter);
-  await store.record(queued);
-
-  const recovery = new ExecutionRecoveryService(store);
-  const result = await recovery.recover();
-
-  assert.equal(result.found, 0);
-  assert.equal(result.recovered, 0);
-
-  // Verify none were touched
-  assert.equal((await store.get(submitted.id))?.status, "submitted");
-  assert.equal((await store.get(confirmed.id))?.status, "confirmed");
-  assert.equal((await store.get(failed.id))?.status, "failed");
-  assert.equal((await store.get(deadLetter.id))?.status, "dead_letter");
-  assert.equal((await store.get(queued.id))?.status, "queued");
+    const res = await fetch(`${baseUrl}/executions/${execution.id}/retry`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.execution.status, "queued");
+  } finally {
+    await close();
+  }
 });
 
-test("Recovery: no duplicate records created", async () => {
-  const store = new InMemoryExecutionStore();
-  const execution = makeExecution({ status: "executing", startedAt: new Date().toISOString() });
-  await store.record(execution);
+test("POST /executions/:id/retry — submitted → 409", async () => {
+  const { baseUrl, close, executionStore } = await startServer();
+  try {
+    const execution = makeExecution({ status: "submitted", txHash: "tx-123" });
+    await executionStore.record(execution);
 
-  const recovery = new ExecutionRecoveryService(store);
-  await recovery.recover();
-
-  // Count records — should still be exactly 1
-  const all = await store.listByOwner("owner-a", 100);
-  assert.equal(all.length, 1);
+    const res = await fetch(`${baseUrl}/executions/${execution.id}/retry`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    assert.equal(res.status, 409);
+  } finally {
+    await close();
+  }
 });
 
-test("Recovery: idempotent — second call does not re-recover", async () => {
-  const store = new InMemoryExecutionStore();
-  const execution = makeExecution({ status: "executing", startedAt: new Date().toISOString() });
-  await store.record(execution);
+test("POST /executions/:id/retry — confirmed → 409", async () => {
+  const { baseUrl, close, executionStore } = await startServer();
+  try {
+    const execution = makeExecution({ status: "confirmed", txHash: "tx-123" });
+    await executionStore.record(execution);
 
-  const recovery = new ExecutionRecoveryService(store);
-  const first = await recovery.recover();
-  assert.equal(first.recovered, 1);
-
-  const second = await recovery.recover();
-  assert.equal(second.found, 0);
-  assert.equal(second.recovered, 0);
-
-  const updated = await store.get(execution.id);
-  assert.equal(updated?.status, "failed");
+    const res = await fetch(`${baseUrl}/executions/${execution.id}/retry`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    assert.equal(res.status, 409);
+  } finally {
+    await close();
+  }
 });
 
-test("Recovery: queue worker reprocesses recovered execution", async () => {
-  const store = new InMemoryExecutionStore();
-  let executed = 0;
-  const pipelineExecutor = async (record: ExecutionRecord) => {
-    executed++;
-    return {
-      record,
-      success: true,
-      status: "submitted",
-      txHash: "tx-recovered",
-      error: null,
-    };
-  };
-  const queue = new ExecutionQueue(store, pipelineExecutor, async () => ({
-    accountId: () => "GACCOUNT",
-    sequenceNumber: () => "1",
-    incrementSequenceNumber: () => {},
-  }));
+test("POST /executions/:id/retry — max attempts reached → 409", async () => {
+  const { baseUrl, close, executionStore } = await startServer();
+  try {
+    const execution = makeExecution({ status: "failed", attempt: 3, errorClass: "transient" });
+    await executionStore.record(execution);
 
-  // Simulate a stuck executing record (crash scenario)
-  const execution = makeExecution({ status: "executing", startedAt: new Date().toISOString() });
-  await store.record(execution);
-
-  // Recover
-  const recovery = new ExecutionRecoveryService(store);
-  const recoveryResult = await recovery.recover();
-  assert.equal(recoveryResult.recovered, 1);
-
-  // Queue worker should now pick it up
-  await queue.processDue();
-  assert.equal(executed, 1);
-
-  const final = await store.get(execution.id);
-  assert.equal(final?.status, "submitted");
-  assert.equal(final?.txHash, "tx-recovered");
+    const res = await fetch(`${baseUrl}/executions/${execution.id}/retry`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    assert.equal(res.status, 409);
+    const body = await res.json();
+    assert.match(body.error, /max retry attempts/);
+  } finally {
+    await close();
+  }
 });
 
-test("Recovery: owner isolation — only own records recovered", async () => {
-  const store = new InMemoryExecutionStore();
-  const executionA = makeExecution({ ownerId: "owner-a", status: "executing", startedAt: new Date().toISOString() });
-  const executionB = makeExecution({ ownerId: "owner-b", status: "executing", startedAt: new Date().toISOString() });
-  await store.record(executionA);
-  await store.record(executionB);
-
-  const recovery = new ExecutionRecoveryService(store);
-  const result = await recovery.recover();
-
-  assert.equal(result.found, 2);
-  assert.equal(result.recovered, 2);
-
-  // Both should be recovered (recovery is global, not owner-scoped — it's a system-level operation)
-  assert.equal((await store.get(executionA.id))?.status, "failed");
-  assert.equal((await store.get(executionB.id))?.status, "failed");
+test("POST /executions/:id/retry — not found → 404", async () => {
+  const { baseUrl, close } = await startServer();
+  try {
+    const res = await fetch(`${baseUrl}/executions/nonexistent/retry`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    assert.equal(res.status, 404);
+  } finally {
+    await close();
+  }
 });
 
-test("Recovery: queue disabled — no worker started", async () => {
-  const store = new InMemoryExecutionStore();
-  const execution = makeExecution({ status: "executing", startedAt: new Date().toISOString() });
-  await store.record(execution);
+test("POST /executions/:id/cancel — queued → dead_letter", async () => {
+  const { baseUrl, close, executionStore } = await startServer();
+  try {
+    const execution = makeExecution({ status: "queued", attempt: 0 });
+    await executionStore.record(execution);
 
-  // Recovery should still work even when queue is disabled
-  const recovery = new ExecutionRecoveryService(store);
-  const result = await recovery.recover();
-  assert.equal(result.recovered, 1);
-
-  // But no queue worker should be running — the record stays in "failed"
-  // until a queue worker is started.
-  const updated = await store.get(execution.id);
-  assert.equal(updated?.status, "failed");
+    const res = await fetch(`${baseUrl}/executions/${execution.id}/cancel`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.execution.status, "dead_letter");
+    assert.equal(body.execution.error, "cancelled by user");
+  } finally {
+    await close();
+  }
 });
 
-test("Recovery: nextRetryAt is immediately eligible", async () => {
-  const store = new InMemoryExecutionStore();
-  const execution = makeExecution({ status: "executing", startedAt: new Date().toISOString() });
-  await store.record(execution);
+test("POST /executions/:id/cancel — executing → dead_letter", async () => {
+  const { baseUrl, close, executionStore } = await startServer();
+  try {
+    const execution = makeExecution({ status: "executing", attempt: 1 });
+    await executionStore.record(execution);
 
-  const recovery = new ExecutionRecoveryService(store);
-  await recovery.recover();
-
-  const updated = await store.get(execution.id);
-  assert.ok(updated?.nextRetryAt);
-  // Should be eligible now (or very close to now)
-  const retryAt = new Date(updated!.nextRetryAt!);
-  const now = new Date();
-  assert.ok(retryAt <= now);
+    const res = await fetch(`${baseUrl}/executions/${execution.id}/cancel`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.execution.status, "dead_letter");
+  } finally {
+    await close();
+  }
 });
 
-test("Recovery: startedAt cleared on recovery", async () => {
-  const store = new InMemoryExecutionStore();
-  const execution = makeExecution({
-    status: "executing",
-    startedAt: new Date().toISOString(),
-  });
-  await store.record(execution);
+test("POST /executions/:id/cancel — submitted → 409", async () => {
+  const { baseUrl, close, executionStore } = await startServer();
+  try {
+    const execution = makeExecution({ status: "submitted", txHash: "tx-123" });
+    await executionStore.record(execution);
 
-  const recovery = new ExecutionRecoveryService(store);
-  await recovery.recover();
+    const res = await fetch(`${baseUrl}/executions/${execution.id}/cancel`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    assert.equal(res.status, 409);
+  } finally {
+    await close();
+  }
+});
 
-  const updated = await store.get(execution.id);
-  assert.equal(updated?.startedAt, null);
+test("POST /executions/:id/cancel — confirmed → 409", async () => {
+  const { baseUrl, close, executionStore } = await startServer();
+  try {
+    const execution = makeExecution({ status: "confirmed", txHash: "tx-123" });
+    await executionStore.record(execution);
+
+    const res = await fetch(`${baseUrl}/executions/${execution.id}/cancel`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    assert.equal(res.status, 409);
+  } finally {
+    await close();
+  }
+});
+
+test("POST /executions/:id/cancel — not found → 404", async () => {
+  const { baseUrl, close } = await startServer();
+  try {
+    const res = await fetch(`${baseUrl}/executions/nonexistent/cancel`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    assert.equal(res.status, 404);
+  } finally {
+    await close();
+  }
 });

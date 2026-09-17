@@ -346,6 +346,12 @@ export async function createApiServer(options: ServerOptions) {
     if (method === "GET" && /^\/agent-queue(\?.*)?$/.test(url)) {
       return handleQueueStatus(req, res);
     }
+    if (method === "POST" && /^\/executions\/[^/]+\/retry$/.test(url)) {
+      return handleRetryExecution(req, res);
+    }
+    if (method === "POST" && /^\/executions\/[^/]+\/cancel$/.test(url)) {
+      return handleCancelExecution(req, res);
+    }
     json(res, { error: "not found" }, 404);
   });
 
@@ -694,6 +700,62 @@ export async function createApiServer(options: ServerOptions) {
     });
   }
 
+  async function handleRetryExecution(req: any, res: any) {
+    const urlObj = new URL(req.url ?? "", "http://localhost");
+    const match = urlObj.pathname.match(/^\/executions\/([^/]+)\/retry$/);
+    const executionId = match?.[1];
+    if (!executionId) return json(res, { error: "invalid execution id in path" }, 400);
+
+    if (!executionQueue) {
+      return json(res, { error: "execution queue not enabled" }, 404);
+    }
+
+    const execution = await executionStore.getForOwner(executionId, requestCtx.ownerId);
+    if (!execution) return json(res, { error: "not found" }, 404);
+
+    if (execution.status !== "failed" && execution.status !== "dead_letter") {
+      return json(res, { error: `cannot retry execution in status '${execution.status}'` }, 409);
+    }
+
+    const maxRetries = executionQueue["retryPolicy"]?.maxRetries ?? 3;
+    if (execution.attempt >= maxRetries) {
+      return json(res, { error: `max retry attempts (${maxRetries}) reached` }, 409);
+    }
+
+    const result = await executionQueue.retry(executionId, maxRetries);
+    if (result.status === "not_found") return json(res, { error: "not found" }, 404);
+    if (result.status === "invalid_state") return json(res, { error: `cannot retry execution in status '${execution.status}'` }, 409);
+    if (result.status === "max_retries_reached") return json(res, { error: `max retry attempts (${maxRetries}) reached` }, 409);
+    if (result.status === "conflict") return json(res, { error: "execution state changed; please refresh" }, 409);
+
+    return json(res, { execution: result.execution, message: "execution queued for retry" });
+  }
+
+  async function handleCancelExecution(req: any, res: any) {
+    const urlObj = new URL(req.url ?? "", "http://localhost");
+    const match = urlObj.pathname.match(/^\/executions\/([^/]+)\/cancel$/);
+    const executionId = match?.[1];
+    if (!executionId) return json(res, { error: "invalid execution id in path" }, 400);
+
+    if (!executionQueue) {
+      return json(res, { error: "execution queue not enabled" }, 404);
+    }
+
+    const execution = await executionStore.getForOwner(executionId, requestCtx.ownerId);
+    if (!execution) return json(res, { error: "not found" }, 404);
+
+    if (execution.status !== "queued" && execution.status !== "executing") {
+      return json(res, { error: `cannot cancel execution in status '${execution.status}'` }, 409);
+    }
+
+    const result = await executionQueue.cancel(executionId);
+    if (result.status === "not_found") return json(res, { error: "not found" }, 404);
+    if (result.status === "invalid_state") return json(res, { error: `cannot cancel execution in status '${execution.status}'` }, 409);
+    if (result.status === "conflict") return json(res, { error: "execution state changed; please refresh" }, 409);
+
+    return json(res, { execution: result.execution, message: "execution cancelled" });
+  }
+
   async function handleIntent(req: any, res: any) {
     const agentId = extractAgentId(req.url);
     if (!agentId) return json(res, { error: "invalid agent id in path" }, 400);
@@ -931,6 +993,10 @@ export async function createApiServer(options: ServerOptions) {
       if (scheduler) {
         scheduler.stop();
         console.log("[scheduler] stopped");
+      }
+      if (executionQueue) {
+        executionQueue.stop();
+        console.log("[execution-queue] stopped");
       }
       // Abort lingering keep-alive connections so the server actually shuts
       // down (Node's http close() waits for active sockets otherwise).
