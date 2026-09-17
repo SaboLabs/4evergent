@@ -885,23 +885,43 @@ export async function createApiServer(options: ServerOptions) {
     }
 
     // ALLOW → full execution path
-    let sourceAccount: any;
-    try {
-      const account = await adapter.getAccount(options.signer.getAccountId());
-      sourceAccount = {
-        accountId: () => account.address,
-        sequenceNumber: () => account.sequence,
-        incrementSequenceNumber: () => {},
-        agentId,
-        ownerId: requestCtx.ownerId,
-      };
-    } catch (e) {
-      const failed = makeActivity(intent, agentId, requestCtx.ownerId, decision, "failed", null, `Unable to load source account: ${(e as Error).message}`);
+    // Phase 26A: Sequence coordinator MUST wrap the entire sequence-sensitive
+    // execution including getSourceAccount(). The coordinator key is the
+    // Stellar public key (options.signer.getAccountId()).
+    //
+    // WHY: Without this, two concurrent ALLOW intents for the same Stellar
+    // account could read the same Horizon sequence and build transactions with
+    // the same sequence number. One would fail at Horizon.
+    //
+    // getSourceAccount() is called INSIDE the lock to prevent the race where
+    // both executions read the sequence before either acquires the lock.
+    const accountId = options.signer.getAccountId();
+    const outcome = await sequenceCoordinator.runExclusive(accountId, async () => {
+      let sourceAccount: any;
+      try {
+        const account = await adapter.getAccount(options.signer.getAccountId());
+        sourceAccount = {
+          accountId: () => account.address,
+          sequenceNumber: () => account.sequence,
+          incrementSequenceNumber: () => {},
+          agentId,
+          ownerId: requestCtx.ownerId,
+        };
+      } catch (e) {
+        throw new Error(`Unable to load source account: ${(e as Error).message}`);
+      }
+
+      return pipeline.execute({ intent, sourceAccount });
+    }).catch((e: any) => {
+      return { status: "failed", message: e?.message ?? "Unknown error" } as any;
+    });
+
+    // Handle the failure case from getSourceAccount() inside the lock
+    if (outcome.status === "failed") {
+      const failed = makeActivity(intent, agentId, requestCtx.ownerId, decision, "failed", null, outcome.message ?? "Unknown error");
       await store.record(failed);
       return json(res, toIntentResponse(failed), 502);
     }
-
-    const outcome = await pipeline.execute({ intent, sourceAccount });
 
     if (outcome.status === "submitted") {
       if (outcome.activityId) {
@@ -1001,8 +1021,12 @@ export async function createApiServer(options: ServerOptions) {
       void executionQueue.enqueue(executionRecord);
     } else {
       // Fallback: Phase 8 fire-and-forget behavior
+      // Phase 26A: Must also use sequence coordinator
+      const accountId = options.signer.getAccountId();
       setImmediate(() => {
-        pipeline.executeApproved(approvalId, approver).catch(() => {});
+        sequenceCoordinator.runExclusive(accountId, async () => {
+          return pipeline.executeApproved(approvalId, approver);
+        }).catch(() => {});
       });
     }
 
