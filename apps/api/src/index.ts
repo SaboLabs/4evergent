@@ -16,6 +16,7 @@ import { AgentScheduler } from "./scheduler.js";
 import { ScheduleExecutionService } from "./schedule-execution.js";
 import { ExecutionQueue } from "./execution-queue.js";
 import { ExecutionRecoveryService } from "./execution-recovery.js";
+import { TransactionStatusReconciler } from "@4evergent/stellar";
 import type { ExecutionRecord } from "@4evergent/database";
 import type { ScheduleExecutionResult } from "./schedule-execution.js";
 import {
@@ -102,6 +103,12 @@ export interface ServerOptions {
     concurrency?: number;
     instance?: ExecutionQueue;
   };
+  /** Enable on-chain transaction status reconciliation (opt-in). */
+  reconciliation?: {
+    enabled?: boolean;
+    intervalMs?: number;
+    instance?: import("@4evergent/stellar").TransactionStatusReconciler;
+  };
 }
 
 const DEFAULT_OWNER = "dev-owner";
@@ -149,6 +156,7 @@ export async function createApiServer(options: ServerOptions) {
   // --- Execution recovery setup ---
   const recoveryService = new ExecutionRecoveryService(executionStore);
   let executionQueue: ExecutionQueue | null = null;
+  let reconciler: import("@4evergent/stellar").TransactionStatusReconciler | null = null;
 
   // Run crash recovery BEFORE starting the queue worker.
   if (options.executionQueue?.enabled) {
@@ -162,6 +170,20 @@ export async function createApiServer(options: ServerOptions) {
     } catch (err) {
       console.error("[execution-recovery] recovery failed:", err);
     }
+  }
+
+  // --- Transaction status reconciliation setup ---
+  if (options.reconciliation?.enabled) {
+    const statusProvider: import("@4evergent/stellar").TransactionStatusProvider = {
+      getStatus: (txHash: string) => adapter.getTransactionStatus(txHash),
+    };
+    reconciler =
+      options.reconciliation.instance ??
+      new TransactionStatusReconciler(executionStore, statusProvider, {
+        intervalMs: options.reconciliation.intervalMs,
+      });
+    reconciler.start();
+    console.log("[reconciler] started, interval:", options.reconciliation.intervalMs ?? 30_000, "ms");
   }
 
   if (options.executionQueue?.enabled) {
@@ -997,6 +1019,10 @@ export async function createApiServer(options: ServerOptions) {
       if (executionQueue) {
         executionQueue.stop();
         console.log("[execution-queue] stopped");
+      }
+      if (reconciler) {
+        reconciler.stop();
+        console.log("[reconciler] stopped");
       }
       // Abort lingering keep-alive connections so the server actually shuts
       // down (Node's http close() waits for active sockets otherwise).

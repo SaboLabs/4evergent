@@ -17,10 +17,27 @@ function statusClass(status: ExecutionStatus): string {
   switch (status) {
     case 'queued': return 'badge-info';
     case 'executing': return 'badge-warn';
-    case 'submitted': return 'badge-ok';
+    case 'submitted': return 'badge-warn';
     case 'confirmed': return 'badge-ok';
     case 'failed': return 'badge-err';
     case 'dead_letter': return 'badge-err';
+  }
+}
+
+function statusDescription(status: ExecutionStatus): string | null {
+  switch (status) {
+    case 'queued':
+      return 'Execution is waiting in the queue.';
+    case 'executing':
+      return 'Execution is being processed by the worker.';
+    case 'submitted':
+      return 'Transaction submitted to Stellar. Waiting for on-chain confirmation.';
+    case 'confirmed':
+      return 'Transaction confirmed on-chain.';
+    case 'failed':
+      return 'Transaction failed on-chain.';
+    case 'dead_letter':
+      return 'Execution failed and will not be retried automatically.';
   }
 }
 
@@ -40,9 +57,7 @@ export default function ExecutionDetail({ executionId, onBack }: { executionId: 
   if (error) return <EmptyState title="Failed to load execution" message={error} />;
   if (!execution) return <EmptyState title="Execution not found" message="This execution does not exist or you do not have access." />;
 
-  const isRetrying = execution.status === 'failed' && execution.nextRetryAt !== null && execution.errorClass === 'transient';
-  const statusDisplay = isRetrying ? 'Retrying' : statusLabel(execution.status);
-  const statusCls = isRetrying ? 'badge-warn' : statusClass(execution.status);
+  const desc = statusDescription(execution.status);
 
   return (
     <section>
@@ -53,10 +68,10 @@ export default function ExecutionDetail({ executionId, onBack }: { executionId: 
 
       <div className="detail-grid">
         <DetailCard title="Status">
-          <span className={`badge ${statusCls}`}>{statusDisplay}</span>
-          {execution.status === 'dead_letter' && (
-            <p className="warning">This execution will not be retried automatically.</p>
-          )}
+          <span className={`badge ${statusClass(execution.status)}`}>
+            {statusLabel(execution.status)}
+          </span>
+          {desc && <p className="status-desc">{desc}</p>}
         </DetailCard>
         <DetailCard title="Agent"><code>{execution.agentId}</code></DetailCard>
         <DetailCard title="Intent">{execution.intent.type}</DetailCard>
@@ -65,11 +80,11 @@ export default function ExecutionDetail({ executionId, onBack }: { executionId: 
             ? `${execution.intent.amount} ${(execution.intent.assetDetails as { code?: string } | undefined)?.code ?? execution.intent.asset}`
             : '-'}
         </DetailCard>
+        <DetailCard title="Transaction Hash">
+          {execution.txHash ? <code className="copyable" title="Click to copy" onClick={() => navigator.clipboard?.writeText(execution.txHash as string)}>{(execution.txHash as string).slice(0, 12)}…{(execution.txHash as string).slice(-8)}</code> : '-'}
+        </DetailCard>
         <DetailCard title="Attempt">
           {execution.attempt > 0 ? String(execution.attempt) : '-'}
-        </DetailCard>
-        <DetailCard title="Next Retry">
-          {execution.nextRetryAt ? new Date(execution.nextRetryAt).toLocaleString() : '-'}
         </DetailCard>
         <DetailCard title="Created">{new Date(execution.createdAt).toLocaleString()}</DetailCard>
         <DetailCard title="Updated">{new Date(execution.updatedAt).toLocaleString()}</DetailCard>
@@ -79,20 +94,10 @@ export default function ExecutionDetail({ executionId, onBack }: { executionId: 
         <DetailCard title="Completed">
           {execution.completedAt ? new Date(execution.completedAt).toLocaleString() : '-'}
         </DetailCard>
-        <DetailCard title="Transaction Hash">
-          {execution.txHash ? <code>{execution.txHash}</code> : '-'}
-        </DetailCard>
         <DetailCard title="Error">
           {execution.error ?? '-'}
         </DetailCard>
       </div>
-
-      {execution.error && (
-        <div className="block">
-          <h2>Error Details</h2>
-          <div className="error-display">{execution.error}</div>
-        </div>
-      )}
     </section>
   );
 }

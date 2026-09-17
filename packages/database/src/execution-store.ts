@@ -57,6 +57,13 @@ export class InMemoryExecutionStore implements ExecutionStore {
       .slice(0, Math.max(1, Math.min(limit, MAX_LIMIT)));
   }
 
+  async listSubmitted(limit = MAX_LIMIT): Promise<ExecutionRecord[]> {
+    return [...this.records.values()]
+      .filter((r) => r.status === "submitted")
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+      .slice(0, Math.max(1, Math.min(limit, MAX_LIMIT)));
+  }
+
   async update(id: string, patch: Partial<ExecutionRecord>): Promise<ExecutionRecord | null> {
     const existing = this.records.get(id);
     if (!existing) return null;
@@ -226,6 +233,14 @@ export class SQLiteExecutionStore implements ExecutionStore {
     const safeLimit = Math.max(1, Math.min(limit, MAX_LIMIT));
     const rows = this.db
       .prepare("SELECT * FROM executions WHERE status = 'executing' ORDER BY created_at ASC LIMIT ?")
+      .all(safeLimit) as unknown as ExecutionRow[];
+    return rows.map(rowToExecutionRecord);
+  }
+
+  async listSubmitted(limit = MAX_LIMIT): Promise<ExecutionRecord[]> {
+    const safeLimit = Math.max(1, Math.min(limit, MAX_LIMIT));
+    const rows = this.db
+      .prepare("SELECT * FROM executions WHERE status = 'submitted' ORDER BY created_at ASC LIMIT ?")
       .all(safeLimit) as unknown as ExecutionRow[];
     return rows.map(rowToExecutionRecord);
   }

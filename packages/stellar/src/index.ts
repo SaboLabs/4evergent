@@ -5,6 +5,10 @@ export { StellarSubmitter } from "./submitter.js";
 export { TransactionPipeline } from "./pipeline.js";
 export type { PipelineOptions, PipelineExecuteInput, PipelineOutcome } from "./pipeline.js";
 
+// Transaction status reconciliation
+export { TransactionStatusReconciler } from "./reconciler.js";
+export type { TransactionStatusProvider, TransactionStatus, ReconciliationResult } from "./reconciler.js";
+
 // Signer abstraction
 export type { Signer } from "./signer.js";
 export { TestnetLocalSigner } from "./testnet-local-signer.js";

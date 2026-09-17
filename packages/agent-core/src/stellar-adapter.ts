@@ -62,6 +62,32 @@ export class StellarAdapter {
     const data = await res.json();
     return { records: data._embedded?.records ?? [], nextCursor: data._links?.next?.href };
   }
+
+  /**
+   * Query transaction status from Horizon by hash.
+   *
+   * Returns typed result:
+   *   confirmed    — transaction included in a ledger and successful
+   *   failed       — transaction included in a ledger but failed
+   *   not_found    — transaction not found (may be pending, or may have never been submitted)
+   *   network_error — could not reach Horizon (timeout, 5xx, rate limit, etc.)
+   *
+   * SECURITY: This method only performs read-only queries. It does NOT sign,
+   * submit, or create any transactions. It is safe for the reconciler to call.
+   */
+  async getTransactionStatus(txHash: string): Promise<"confirmed" | "failed" | "not_found" | "network_error"> {
+    try {
+      const res = await this.fetcher(`${this.horizonUrl}/transactions/${txHash}`);
+      if (res.status === 404) return "not_found";
+      if (!res.ok) return "network_error";
+      const data = await res.json();
+      if (data.successful === true) return "confirmed";
+      if (data.successful === false) return "failed";
+      return "network_error";
+    } catch {
+      return "network_error";
+    }
+  }
 }
 
 function formatAsset(b: Record<string, unknown>): string {
