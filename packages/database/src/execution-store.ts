@@ -286,7 +286,7 @@ export class SQLiteExecutionStore implements ExecutionStore {
     const existing = await this.get(id);
     if (!existing || existing.status !== expectedStatus) return null;
     const updated: ExecutionRecord = { ...existing, ...patch, id: existing.id };
-    this.db
+    const result = this.db
       .prepare(
         `UPDATE executions SET
            owner_id = @owner_id, agent_id = @agent_id, approval_id = @approval_id,
@@ -317,6 +317,7 @@ export class SQLiteExecutionStore implements ExecutionStore {
         updated_at: updated.updatedAt,
         expected_status: expectedStatus,
       } as any);
+    if (result.changes === 0) return null;
     return updated;
   }
 

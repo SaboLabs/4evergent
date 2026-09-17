@@ -96,8 +96,8 @@ export class ExecutionQueue {
       // picked it up between listDue and our claim).
       if (record.status === "executing") continue;
 
-      await this.runExecution(record);
-      started++;
+      const claimed = await this.runExecution(record);
+      if (claimed) started++;
     }
 
     return started;
@@ -166,35 +166,38 @@ export class ExecutionQueue {
     }, this.intervalMs);
   }
 
-  private async runExecution(record: ExecutionRecord): Promise<void> {
+  private async runExecution(record: ExecutionRecord): Promise<boolean> {
+    const claimed = await this.claim(record);
+    if (!claimed) return false;
     this.activeCount++;
     try {
-      await this.claim(record);
       const result = await this.runPipeline(record);
       await this.complete(record, result);
+      return true;
     } catch (err) {
       // Classify the error (transient vs permanent) for retry decision
       const errorClass = classifyUncaughtError(err);
       await this.fail(record, err, errorClass);
+      return true;
     } finally {
       this.activeCount--;
     }
   }
 
   /**
-   * Atomically move record from queued/failed → executing. If the record is
-   * already executing (e.g., another worker claimed it), skip.
+   * Atomically claim a due record (queued or failed) → executing.
+   * Uses conditional update against the observed status so a concurrent
+   * worker that already claimed the same id loses the race and skips.
    */
   private async claim(record: ExecutionRecord): Promise<boolean> {
-    const current = await this.store.get(record.id);
-    if (!current) return false;
-    if (current.status === "executing") return false;
-    await this.store.update(record.id, {
+    if (record.status !== "queued" && record.status !== "failed") return false;
+    const now = new Date().toISOString();
+    const updated = await this.store.updateIfStatus(record.id, record.status, {
       status: "executing",
-      startedAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+      startedAt: now,
+      updatedAt: now,
     });
-    return true;
+    return updated !== null;
   }
 
   private async runPipeline(record: ExecutionRecord): Promise<ExecutionResult> {
