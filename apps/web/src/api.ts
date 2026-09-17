@@ -26,6 +26,7 @@ import type {
   ActivityRecord,
   ApprovalRecord,
   SubmitPaymentIntent,
+  SubmitTrustlineIntent,
   ScheduleRecord,
   ScheduleStatus,
 } from './types';
@@ -94,6 +95,12 @@ export const api = {
     request<IntentResponse>(`/agents/${encodeURIComponent(agentId)}/intents`, {
       method: 'POST',
       body: JSON.stringify(intent),
+    }),
+
+  submitTrustline: (agentId: string, intent: SubmitTrustlineIntent) =>
+    request<IntentResponse>(`/agents/${encodeURIComponent(agentId)}/intents`, {
+      method: 'POST',
+      body: JSON.stringify({ ...intent, type: 'trustline' }),
     }),
 
   createAgent: (body: { displayName: string; description?: string; capabilities?: string[]; stellarAddress?: string }) =>

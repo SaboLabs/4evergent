@@ -20,6 +20,20 @@ export class IntentValidator {
   }
 }
 
+function parseAsset(intent: AgentIntent): { code: string; issuer: string | null } | null {
+  if (intent.type !== "payment") return null;
+  if (intent.assetDetails) {
+    if (!intent.assetDetails.code || intent.assetDetails.code.length < 1) return null;
+    if (intent.assetDetails.code === "XLM") {
+      return { code: "XLM", issuer: null };
+    }
+    if (!intent.assetDetails.issuer || !intent.assetDetails.issuer.startsWith("G")) return null;
+    return { code: intent.assetDetails.code, issuer: intent.assetDetails.issuer };
+  }
+  if (intent.asset === "XLM") return { code: "XLM", issuer: null };
+  return null;
+}
+
 function validatePayment(intent: AgentIntent): { valid: boolean; error?: string } {
   if (intent.type !== "payment") return { valid: false, error: "not a payment" };
   if (!intent.amount || isNaN(parseFloat(intent.amount)) || parseFloat(intent.amount) <= 0) {
@@ -31,8 +45,9 @@ function validatePayment(intent: AgentIntent): { valid: boolean; error?: string 
   if (parseFloat(intent.amount) > parseFloat(IntentValidator.MAX_AMOUNT)) {
     return { valid: false, error: "amount exceeds global maximum" };
   }
-  if (!intent.asset || !IntentValidator.VALID_ASSETS.includes(intent.asset)) {
-    return { valid: false, error: `asset '${intent.asset}' not recognized` };
+  const asset = parseAsset(intent);
+  if (!asset) {
+    return { valid: false, error: "asset must be XLM or specify assetDetails with code + issuer" };
   }
   if (!intent.reason || intent.reason.length < 3) {
     return { valid: false, error: "reason must be at least 3 characters" };
@@ -45,8 +60,16 @@ function validateTrustline(intent: AgentIntent): { valid: boolean; error?: strin
   if (!intent.assetCode || intent.assetCode.length < 1) {
     return { valid: false, error: "assetCode required" };
   }
+  if (intent.assetCode === "XLM") {
+    return { valid: false, error: "XLM is native and cannot be used as a trustline" };
+  }
   if (!intent.issuer || !intent.issuer.startsWith("G")) {
     return { valid: false, error: "issuer must be a valid Stellar account" };
+  }
+  if (intent.limit !== undefined) {
+    if (isNaN(parseFloat(intent.limit)) || parseFloat(intent.limit) < 0) {
+      return { valid: false, error: "limit must be a non-negative number" };
+    }
   }
   return { valid: true };
 }

@@ -148,7 +148,16 @@ function extractAmount(intent: AgentIntent): string | null {
 }
 
 function extractAsset(intent: AgentIntent): string {
-  if (intent.type === "payment") return intent.asset;
+  if (intent.type === "payment") {
+    if (intent.assetDetails) {
+      if (intent.assetDetails.code === "XLM") return "XLM";
+      return `${intent.assetDetails.code}:${intent.assetDetails.issuer}`;
+    }
+    return intent.asset;
+  }
+  if (intent.type === "trustline") {
+    return `trustline:${intent.assetCode}:${intent.issuer}`;
+  }
   return "native";
 }
 

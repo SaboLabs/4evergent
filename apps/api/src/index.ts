@@ -1031,20 +1031,56 @@ function parseIntent(body: unknown): AgentIntent {
   const b = body as Record<string, unknown>;
   if (typeof b.type !== "string") throw new Error("intent.type is required");
   switch (b.type) {
-    case "payment":
+    case "payment": {
       if (typeof b.asset !== "string") throw new Error("payment.asset is required");
       if (typeof b.destination !== "string") throw new Error("payment.destination is required");
       if (typeof b.amount !== "string") throw new Error("payment.amount is required as string");
       if (typeof b.reason !== "string") throw new Error("payment.reason is required");
+      let validatedDetails: { code: string; issuer: string | null } | undefined;
+      const assetDetails = (b.assetDetails as { code?: unknown; issuer?: unknown } | undefined);
+      if (assetDetails !== undefined) {
+        if (typeof assetDetails.code !== "string" || assetDetails.code.length < 1 || assetDetails.code.length > 12) {
+          throw new Error("payment.assetDetails.code must be a Stellar asset code (1-12 characters)");
+        }
+        if (assetDetails.code === "XLM") {
+          if (assetDetails.issuer != null && assetDetails.issuer !== "") {
+            throw new Error("payment.assetDetails.issuer must be null for XLM");
+          }
+          validatedDetails = { code: "XLM", issuer: null };
+        } else {
+          if (typeof assetDetails.issuer !== "string" || !assetDetails.issuer.startsWith("G") || assetDetails.issuer.length !== 56) {
+            throw new Error("payment.assetDetails.issuer must be a valid Stellar address (G...)");
+          }
+          validatedDetails = { code: assetDetails.code, issuer: assetDetails.issuer };
+        }
+      }
       return {
         type: "payment",
         asset: b.asset,
+        assetDetails: validatedDetails,
         destination: b.destination,
         amount: b.amount,
         reason: b.reason,
         memo: typeof b.memo === "string" ? b.memo : undefined,
       };
-    case "trustline":
+    }
+    case "trustline": {
+      if (typeof b.assetCode !== "string" || b.assetCode.length < 1 || b.assetCode.length > 12) {
+        throw new Error("trustline.assetCode must be a Stellar asset code (1-12 characters)");
+      }
+      if (b.assetCode === "XLM") throw new Error("XLM cannot be used as a trustline asset");
+      if (typeof b.issuer !== "string" || !b.issuer.startsWith("G") || b.issuer.length !== 56) {
+        throw new Error("trustline.issuer must be a valid Stellar address (G...)");
+      }
+      if (typeof b.reason !== "string") throw new Error("trustline.reason is required");
+      return {
+        type: "trustline",
+        assetCode: b.assetCode,
+        issuer: b.issuer,
+        limit: typeof b.limit === "string" && b.limit.trim().length > 0 ? b.limit : undefined,
+        reason: b.reason,
+      };
+    }
     case "contract_call":
     case "account_settings":
       throw new Error(`intent type '${b.type}' is not yet supported by the transaction pipeline`);

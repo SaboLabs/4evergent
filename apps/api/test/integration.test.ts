@@ -203,17 +203,18 @@ test("API returns 202 for approval-required intent", async () => {
   }
 });
 
-test("API rejects unsupported intent type (trustline)", async () => {
+test("API accepts trustline intent and routes to policy/approval", async () => {
   const { baseUrl, close } = await startServer();
   try {
+    const issuer = Keypair.random().publicKey();
     const res = await post(baseUrl, "/agents/test-agent/intents", {
       type: "trustline",
       assetCode: "USDC",
-      issuer: "GDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-      reason: "test",
+      issuer,
+      reason: "test trustline",
     });
-    assert.equal(res.status, 400);
-    assert.ok(res.body.error.includes("not yet supported"));
+    // Trustline is now supported — should pass validation and enter policy evaluation
+    assert.ok(res.status === 202 || res.status === 403, `expected 202 or 403, got ${res.status}`);
   } finally {
     await close();
   }

@@ -134,8 +134,20 @@ export interface ApiError {
 export interface SubmitPaymentIntent {
   type: "payment";
   asset: string;
+  assetDetails?: {
+    code: string;
+    issuer: string | null;
+  };
   destination: string;
   amount: string;
   reason: string;
   memo?: string;
+}
+
+export interface SubmitTrustlineIntent {
+  type: "trustline";
+  assetCode: string;
+  issuer: string;
+  limit?: string;
+  reason: string;
 }

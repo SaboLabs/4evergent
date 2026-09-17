@@ -58,9 +58,18 @@ export interface AuthorizationService {
 
 export type IntentType = "payment" | "trustline" | "contract_call" | "account_settings";
 
+export type AssetCode = "XLM" | string;
+export type IssuerAddress = string;
+
+export interface PaymentAsset {
+  code: AssetCode;
+  issuer: IssuerAddress | null;
+}
+
 export interface PaymentIntent {
   type: "payment";
   asset: string;
+  assetDetails?: PaymentAsset;
   destination: string;
   amount: string;
   reason: string;

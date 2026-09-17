@@ -109,7 +109,11 @@ export class TransactionPipeline {
 
     let tx;
     try {
-      tx = await this.builder.buildPayment(sourceAccount, intent as any, this.signer.getNetworkPassphrase());
+      if (intent.type === "trustline") {
+        tx = await this.builder.buildTrustline(sourceAccount, intent as any, this.signer.getNetworkPassphrase());
+      } else {
+        tx = await this.builder.buildPayment(sourceAccount, intent as any, this.signer.getNetworkPassphrase());
+      }
     } catch (e: any) {
       return {
         status: "rejected",
@@ -241,7 +245,11 @@ export class TransactionPipeline {
 
     let tx;
     try {
-      tx = await this.builder.buildPayment(sourceAccount, intent as any, this.signer.getNetworkPassphrase());
+      if (intent.type === "trustline") {
+        tx = await this.builder.buildTrustline(sourceAccount, intent as any, this.signer.getNetworkPassphrase());
+      } else {
+        tx = await this.builder.buildPayment(sourceAccount, intent as any, this.signer.getNetworkPassphrase());
+      }
     } catch (e: any) {
       await this.approvalStore.update(approvalId, { status: "failed", error: e.message });
       return {
