@@ -90,9 +90,9 @@ All decisions recorded via the ADR-lite convention. Each entry: **Status | Conte
 - Retries transient failures (network/Horizon/submission errors) with exponential backoff (baseDelayMs \* 2^attempt, capped at maxDelayMs)
 - Moves permanent failures (policy deny, invalid intent, validation error) directly to `dead_letter`
 - Bounded retries: max 3 (configurable) after which execution moves to `dead_letter`
-- Duplicate safety: claims via status check (executing records are skipped), suitable for single-process SQLite architecture
+- Duplicate safety: atomic conditional update CAS (`updateIfStatus(queued→executing)`) ensures only one worker can claim a queued execution
 - Owner-scoped: all execution records are tied to `ownerId`, endpoints enforce owner isolation via `getForOwner/listByOwner`
-- Crash recovery: records in `failed` state with `nextRetryAt` are picked up on restart via `listDue`
+- Recovery: `ExecutionRecoveryService` scans stuck `executing` records on startup and re-queues them via `nextRetryAt`
 - Approval boundary: execution records carry `approvalId`; the queue does NOT bypass approval — it only executes after approval has been recorded
 
 **Consequences:**
@@ -100,8 +100,8 @@ All decisions recorded via the ADR-lite convention. Each entry: **Status | Conte
 - Transient failures are automatically retried with backoff
 - Permanent failures are visible in `dead_letter` for manual intervention
 - Scheduler (Phase 8) and approval flow both enqueue through the same queue
-- Exactly-once is not guaranteed (single-process SQLite provides at-most-once deduplication via status claims); document as known limitation
-- Records in `executing` at crash time are stuck — a recovery scan on startup can re-queue them (deferred to future phase)
+- Exactly-once is not guaranteed (single-process SQLite provides at-most-once deduplication via atomic status claims); document as known limitation
+- Recovery: `ExecutionRecoveryService` scans stuck `executing` records on startup and re-queues them via `nextRetryAt`
 
 ## ADR-013: Agent Self-Serve Creation
 

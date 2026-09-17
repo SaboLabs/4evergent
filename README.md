@@ -67,15 +67,13 @@ Stellar is purpose-built for asset issuance and payments with native low-fee, fa
 ├── packages/
 │   ├── agent-core/       # Agent runtime, intent validation, Stellar adapter
 │   ├── policy/           # Deterministic authorization engine
-│   ├── stellar/          # Transaction construction + simulation helpers
-│   ├── database/         # DB schema/ORM client
+│   ├── stellar/          # Transaction construction + simulation + submission + reconciliation
+│   ├── database/         # In-memory + SQLite stores (activity, approvals, agents, executions)
 │   └── shared/           # Shared types & schemas
 ├── contracts/
 │   ├── agent-registry/   # Soroban contract (agent identity on-chain)
 │   └── permissions/      # Soroban authorization primitives
 ├── docs/
-├── tests/
-├── scripts/
 └── README.md
 ```
 
@@ -110,8 +108,8 @@ Key guarantees:
 git clone https://github.com/SaboLabs/4evergent
 cd 4evergent
 
-# install
-pnpm install
+# install (Node 22+, pnpm 9+)
+pnpm install --frozen-lockfile
 
 # build all packages (bottom-up)
 pnpm build
@@ -119,6 +117,11 @@ pnpm build
 # run tests
 pnpm test
 ```
+
+### Prerequisites
+
+- **Node.js >= 22** (required for `node:sqlite` built-in module)
+- **pnpm >= 9** (workspace package manager)
 
 ### Run the dashboard
 
@@ -148,7 +151,7 @@ The MVP is validated against the testnet Horizon API. See [docs/testnet.md](docs
 
 ## Adding a new agent capability
 
-1. Add the new intent type to `packages/shared/src/index.ts` (extend the `AgentIntent` union).
+1. Add the new intent type to `packages/shared/src/types.ts` (extend the `AgentIntent` union).
 2. Add validation logic to `IntentValidator` in `packages/agent-core/src/`.
 3. Add a corresponding policy rule entry in `packages/policy/src/types.ts`.
 4. Add the transaction builder in `packages/stellar/src/`.
@@ -189,11 +192,14 @@ Schedules are stored in SQLite (when `dbPath` is configured) or in-memory. The s
 | 1 | Agent identity, policy engine, intent validation, Stellar read adapter, activity logging | ✅ Shipped |
 | 2 | Full transaction pipeline (construct → simulate → authorize → sign → submit) with Signer abstraction | ✅ Shipped |
 | 3 | Persistent SQLite stores, approval/reject HTTP endpoints, daily limit enforcement | ✅ Shipped |
-| 4 | React web dashboard (Overview / Agents / Activity / Approvals / Submit Intent) + read-only API | ✅ Shipped |
-| 5 | Soroban AgentRegistry contract (register/update/deactivate/query) | Future |
-| 6 | Soroban Permissions contract (delegation + revocation) | Future |
-| 7 | Frontend agent dashboard (discover, profile, activity) | Future |
-| 8 | Multi-agent capability discovery & economy | Future |
+| 4 | React web dashboard + read-only API | ✅ Shipped |
+| 5-6 | Soroban AgentRegistry & Permissions contracts | Scaffolded, not compiled |
+| 7 | Multi-agent capability discovery & economy | Future |
+| 8 | Agent scheduling & automation | ✅ Shipped |
+| 9 | Persistent execution queue with retry & dead-letter | ✅ Shipped |
+| 10 | Execution queue crash recovery | ✅ Shipped |
+| 11 | Agent self-serve creation | ✅ Shipped |
+| 12 | Trustline & non-XLM asset support | ✅ Shipped |
 
 ---
 

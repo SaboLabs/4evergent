@@ -134,9 +134,9 @@ Intent passes policy → Simulation succeeds → Decision = requires_approval?
 
 Approval state is recorded in the activity log. An approval is bound to a specific intent hash — it cannot be reused for a different intent.
 
-**LIMITATION (Phase 3):** Approval state is persisted in an `ApprovalStore` (SQLite or in-memory). The approve/reject endpoints are stateless HTTP handlers that transition records. Cross-agent approval isolation is NOT yet enforced — any party holding an `approvalId` can approve/reject it. A future phase will add agent-scoped access control on approvals.
+**LIMITATION (Phase 3):** Approval state is persisted in an `ApprovalStore` (SQLite or in-memory). The approve/reject endpoints are stateless HTTP handlers that transition records. Cross-agent approval isolation IS enforced — `canApprove`/`canReject` check that the caller owns the agent via `ResourceAuthorizationService`.
 
-Async fire-and-forget execution (after approve) uses `setImmediate`. If the process exits or the execution throws, the approval remains in `executing`/`approved` state with no retry or dead-letter queue. A future phase will add an execution queue with retry + dead-letter semantics.
+After approval, execution is enqueued through the persistent `ExecutionQueue` with retry and dead-letter semantics. If the process exits mid-execution, the `ExecutionRecoveryService` re-queues stuck records on startup.
 
 ## Phase 5: Authorization & Ownership Model
 
