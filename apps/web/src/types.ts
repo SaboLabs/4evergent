@@ -127,6 +127,40 @@ export interface ApprovalRecord {
   updatedAt: string;
 }
 
+export type ExecutionStatus =
+  | "queued"
+  | "executing"
+  | "submitted"
+  | "confirmed"
+  | "failed"
+  | "dead_letter";
+
+export interface ExecutionRecord {
+  id: string;
+  ownerId: string;
+  agentId: string;
+  approvalId: string | null;
+  activityId: string | null;
+  intent: AgentIntent & { assetDetails?: { code?: string; issuer?: string | null } };
+  status: ExecutionStatus;
+  policyDecision: PolicyDecision | null;
+  simulationResult: SimulationResult | null;
+  txHash: string | null;
+  error: string | null;
+  attempt: number;
+  nextRetryAt: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  errorClass: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface QueueSummary {
+  running: boolean;
+  byStatus: Record<string, number>;
+}
+
 export interface ApiError {
   error: string;
 }

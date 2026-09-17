@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { api } from '../api';
 import type { AgentRecord, ActivityRecord } from '../types';
 import { ScheduleList } from './ScheduleList';
+import { ExecutionList } from './ExecutionList';
 
 export default function AgentDetail({ agentId }: { agentId: string }) {
   const [agent, setAgent] = useState<AgentRecord | null>(null);
@@ -82,6 +83,10 @@ export default function AgentDetail({ agentId }: { agentId: string }) {
         <h2>Schedules</h2>
         {scheduleError && <div className="error">{scheduleError}</div>}
         <ScheduleList agentId={agentId} onError={setScheduleError} />
+      </div>
+      <div className="block">
+        <h2>Executions</h2>
+        <ExecutionList agentId={agentId} />
       </div>
     </section>
   );

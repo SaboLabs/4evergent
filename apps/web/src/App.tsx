@@ -5,13 +5,16 @@ import AgentDetail from './pages/AgentDetail';
 import Activity from './pages/Activity';
 import Approvals from './pages/Approvals';
 import Submit from './pages/Submit';
+import Executions from './pages/Executions';
+import ExecutionDetail from './pages/ExecutionDetail';
 
-type Tab = 'overview' | 'agents' | 'agent-detail' | 'activity' | 'approvals' | 'submit';
+type Tab = 'overview' | 'agents' | 'agent-detail' | 'activity' | 'approvals' | 'submit' | 'executions' | 'execution-detail';
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'overview', label: 'Overview' },
   { id: 'agents', label: 'Agents' },
   { id: 'activity', label: 'Activity' },
+  { id: 'executions', label: 'Executions' },
   { id: 'approvals', label: 'Approvals' },
   { id: 'submit', label: 'Submit Intent' },
 ];
@@ -19,10 +22,24 @@ const TABS: { id: Tab; label: string }[] = [
 export default function App() {
   const [tab, setTab] = useState<Tab>('overview');
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  const [selectedExecutionId, setSelectedExecutionId] = useState<string | null>(null);
 
   const handleAgentClick = (agentId: string) => {
     setSelectedAgentId(agentId);
     setTab('agent-detail');
+  };
+
+  const handleExecutionClick = (executionId: string) => {
+    setSelectedExecutionId(executionId);
+    setTab('execution-detail');
+  };
+
+  const handleBack = () => {
+    if (tab === 'execution-detail') {
+      setTab('executions');
+    } else if (tab === 'agent-detail') {
+      setTab('agents');
+    }
   };
 
   return (
@@ -51,6 +68,10 @@ export default function App() {
           {tab === 'agents' && <Agents onAgentClick={handleAgentClick} />}
           {tab === 'agent-detail' && selectedAgentId && <AgentDetail agentId={selectedAgentId} />}
           {tab === 'activity' && <Activity />}
+          {tab === 'executions' && <Executions onExecutionClick={handleExecutionClick} />}
+          {tab === 'execution-detail' && selectedExecutionId && (
+            <ExecutionDetail executionId={selectedExecutionId} onBack={handleBack} />
+          )}
           {tab === 'approvals' && <Approvals />}
           {tab === 'submit' && <Submit />}
         </main>

@@ -29,6 +29,8 @@ import type {
   SubmitTrustlineIntent,
   ScheduleRecord,
   ScheduleStatus,
+  ExecutionRecord,
+  QueueSummary,
 } from './types';
 
 export interface IntentResponse {
@@ -108,6 +110,33 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(body),
     }),
+
+  // ===== Executions =====
+
+  listAllExecutions: async (limit = 50): Promise<{ executions: ExecutionRecord[] }> => {
+    const agents = await request<{ agents: AgentRecord[] }>('/agents');
+    const results = await Promise.all(
+      agents.agents.map((a) =>
+        request<{ agentId: string; executions: ExecutionRecord[] }>(
+          `/agents/${encodeURIComponent(a.id)}/executions?limit=${limit}`
+        )
+      )
+    );
+    const executions = results.flatMap((r) => r.executions);
+    executions.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    return { executions };
+  },
+
+  listAgentExecutions: (agentId: string, limit = 50) =>
+    request<{ agentId: string; executions: ExecutionRecord[] }>(
+      `/agents/${encodeURIComponent(agentId)}/executions?limit=${limit}`
+    ),
+
+  getExecution: (executionId: string) =>
+    request<{ execution: ExecutionRecord }>(`/executions/${encodeURIComponent(executionId)}`),
+
+  getQueueStatus: () =>
+    request<QueueSummary>('/agent-queue'),
 
   // ===== Schedules =====
 
