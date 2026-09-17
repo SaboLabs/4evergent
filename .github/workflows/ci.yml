@@ -32,6 +32,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Build shared package
+        run: pnpm --filter @4evergent/shared build
+
       - name: Typecheck
         run: pnpm typecheck
 
