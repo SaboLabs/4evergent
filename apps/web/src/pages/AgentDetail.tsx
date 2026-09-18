@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
 import type { AgentRecord, ActivityRecord, PolicyRules } from '../types';
-import { ScheduleList } from './ScheduleList';
+import { ScheduleManagement } from './ScheduleManagement';
 import { ExecutionList } from './ExecutionList';
 
 const DEFAULT_POLICY: PolicyRules = {
@@ -371,7 +371,7 @@ export default function AgentDetail({ agentId }: { agentId: string }) {
       <div className="block">
         <h2>Schedules</h2>
         {scheduleError && <div className="error">{scheduleError}</div>}
-        <ScheduleList agentId={agentId} onError={setScheduleError} />
+        <ScheduleManagement agentId={agentId} onError={setScheduleError} />
       </div>
       <div className="block">
         <h2>Executions</h2>
