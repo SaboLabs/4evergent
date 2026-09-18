@@ -2,6 +2,17 @@
 // These intentionally omit all secret, XDR, and transaction-blob fields.
 // The API is the source of truth — types here are for frontend ergonomics.
 
+export interface PolicyRules {
+  maxTxAmount: Record<string, string>;
+  dailySpendingLimit: Record<string, string>;
+  allowedAssets: string[];
+  allowedDestinations: string[];
+  allowedContractIds: string[];
+  txTypeRestrictions: Record<string, boolean>;
+  approvalThreshold: string;
+  requireHumanApprovalForAmountAbove: string;
+}
+
 export type ActivityStatus =
   | "pending"
   | "rejected"

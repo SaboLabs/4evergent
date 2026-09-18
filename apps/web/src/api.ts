@@ -31,6 +31,7 @@ import type {
   ScheduleStatus,
   ExecutionRecord,
   QueueSummary,
+  PolicyRules,
 } from './types';
 
 export interface IntentResponse {
@@ -75,6 +76,22 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify({ status }),
     }),
+
+  // ===== Policy =====
+
+  getPolicy: (agentId: string) =>
+    request<{ agentId: string; policy: PolicyRules; version: number; updatedAt: string | null }>(
+      `/agents/${encodeURIComponent(agentId)}/policy`
+    ),
+
+  updatePolicy: (agentId: string, policy: Partial<PolicyRules>) =>
+    request<{ agentId: string; policy: PolicyRules; version: number }>(
+      `/agents/${encodeURIComponent(agentId)}/policy`,
+      {
+        method: 'PUT',
+        body: JSON.stringify(policy),
+      },
+    ),
 
   listApprovals: (statusFilter?: string) => {
     const qs = statusFilter ? `?status=${encodeURIComponent(statusFilter)}` : '';

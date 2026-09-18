@@ -385,6 +385,130 @@ input:focus, select:focus {
   .form-actions button { background: var(--bg); color: var(--text); border: 1px solid var(--border); }
   .form-actions button[type="submit"] { background: var(--accent); color: #0a0e14; border-color: transparent; }
 
+  /* Policy Form */
+  .policy-form {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+  }
+  .policy-section {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .policy-section h3 {
+    margin: 0;
+    font-size: 14px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 6px;
+  }
+  .form-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+  }
+  .form-grid label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 14px;
+  }
+  .form-grid label span {
+    color: var(--text);
+    font-weight: 500;
+  }
+  .form-grid input {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    padding: 8px 12px;
+    font-size: 14px;
+  }
+  .form-grid input:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+  .form-grid small {
+    color: var(--text-dim);
+    font-size: 12px;
+  }
+  .chip-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 4px 10px;
+    font-size: 13px;
+  }
+  .chip-remove {
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    cursor: pointer;
+    padding: 0;
+    font-size: 16px;
+    line-height: 1;
+  }
+  .chip-remove:hover {
+    color: var(--err);
+  }
+  .inline-input input {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    padding: 8px 12px;
+    font-size: 14px;
+    width: 100%;
+  }
+  .inline-input input:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+  .checkbox-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 8px;
+  }
+  .checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  .checkbox-label input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--accent);
+  }
+  .policy-meta {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    padding-top: 8px;
+    border-top: 1px solid var(--border);
+  }
+  .muted {
+    color: var(--text-dim);
+    font-size: 12px;
+  }
+
   .nav-item.active {
     border-left-color: transparent;
     border-bottom-color: var(--accent);
