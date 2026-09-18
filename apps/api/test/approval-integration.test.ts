@@ -144,6 +144,8 @@ test("approval: approve valid approval → 200 approved (async execution)", asyn
     const approval = await approvals.get(intentRes.body.approvalId);
     assert.ok(approval);
     assert.equal(approval!.status, "approved");
+    // Phase 28K-2: approver comes from authenticated identity (no client spoofing).
+    // DevAuthProvider returns subject="dev-user", so approver is "dev-user".
     assert.equal(approval!.approver, "dev-user");
     assert.ok(approval!.approvedAt);
   } finally {

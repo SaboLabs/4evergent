@@ -1,5 +1,6 @@
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import type {
   AgentIntent,
   ActivityStatus,
@@ -47,7 +48,7 @@ import {
   type ActivityRecord,
   type PolicyConfigStore,
 } from "@4evergent/database";
-import type { PolicyRules, Agent, RequestContext, AuthorizationService } from "@4evergent/shared";
+import type { PolicyRules, Agent, RequestContext, AuthorizationService, AuthProvider, AuthenticatedPrincipal } from "@4evergent/shared";
 
 const TESTNET_PASSPHRASE = "Test SDF Network ; September 2015";
 
@@ -87,7 +88,7 @@ export interface ServerOptions {
   scheduleStore?: ScheduleStore;
   dbPath?: string;
   deferExecution?: boolean;
-  requestContext?: RequestContext;
+  authProvider?: AuthProvider;
   authorizationService?: AuthorizationService;
   /** Enable the background scheduler to execute due schedules. */
   scheduler?: {
@@ -117,8 +118,6 @@ export interface ServerOptions {
   };
 }
 
-const DEFAULT_OWNER = "dev-owner";
-
 export async function createApiServer(options: ServerOptions) {
   const store: ActivityStore =
     options.activityStore ??
@@ -147,7 +146,27 @@ export async function createApiServer(options: ServerOptions) {
   const authorizationService: AuthorizationService =
     options.authorizationService ?? new ResourceAuthorizationService(defaultAuthzCtx);
 
-  const requestCtx: RequestContext = options.requestContext ?? { ownerId: DEFAULT_OWNER };
+  // Phase 28K-1: Authentication Boundary
+  const authProvider = options.authProvider;
+  const als = new AsyncLocalStorage<RequestContext>();
+
+  async function authenticateRequest(req: any): Promise<AuthenticatedPrincipal | null> {
+    if (!authProvider) return null;
+    return authProvider.authenticate({
+      headers: req.headers as Record<string, string | string[] | undefined>,
+    });
+  }
+
+  function principalToContext(principal: AuthenticatedPrincipal | null): RequestContext {
+    if (principal) {
+      return { principal, ownerId: principal.ownerId };
+    }
+    return { principal: null, ownerId: null };
+  }
+
+  // Phase 28K-2: No Proxy. All handlers receive ctx explicitly.
+  // Any remaining `ctx` usage will fail loudly in development.
+  void als;
 
   // Phase 28A: Create policy resolver that loads agent-specific rules
   // Falls back to DEFAULT_RULES if no custom policy exists for the agent
@@ -367,85 +386,101 @@ export async function createApiServer(options: ServerOptions) {
     const url = req.url ?? "";
     const method = req.method ?? "GET";
 
-    if (method === "POST" && url === "/agents") {
-      return handleCreateAgent(req, res);
+    // Phase 28K-1: Authenticate and create request-scoped context
+    const principal = await authenticateRequest(req);
+    const requestScopedCtx = principalToContext(principal);
+
+    return als.run(requestScopedCtx, () => {
+      // Health check is public
+      if (method === "GET" && url === "/health") {
+        return json(res, { status: "ok", signerAccountId: options.signer.getAccountId() });
+      }
+
+      // Protected endpoints require authentication
+      if (!requestScopedCtx.ownerId) {
+        return json(res, { error: "unauthorized" }, 401);
+      }
+
+      if (method === "POST" && url === "/agents") {
+      return handleCreateAgent(requestScopedCtx, req, res);
     }
     if (method === "POST" && /^\/agents\/[^/]+\/intents$/.test(url)) {
-      return handleIntent(req, res);
+      return handleIntent(requestScopedCtx, req, res);
     }
     if (method === "POST" && /^\/approvals\/[^/]+\/(approve|reject)$/.test(url)) {
       const isApprove = url.endsWith("/approve");
-      return isApprove ? handleApprove(req, res) : handleReject(req, res);
+      return isApprove ? handleApprove(requestScopedCtx, req, res) : handleReject(requestScopedCtx, req, res);
     }
     if (method === "GET" && url === "/health") {
       return json(res, { status: "ok", signerAccountId: options.signer.getAccountId() });
     }
     if (method === "GET" && /^\/agents\/[^/]+\/policy$/.test(url)) {
-      return handleGetPolicy(req, res);
+      return handleGetPolicy(requestScopedCtx, req, res);
     }
     if (method === "PUT" && /^\/agents\/[^/]+\/policy$/.test(url)) {
-      return handlePutPolicy(req, res);
+      return handlePutPolicy(requestScopedCtx, req, res);
     }
 
     if (method === "GET" && url === "/agents") {
-      return handleListAgents(req, res);
+      return handleListAgents(requestScopedCtx, req, res);
     }
     if (method === "GET" && /^\/agents\/[^/]+$/.test(url)) {
-      return handleGetAgent(req, res);
+      return handleGetAgent(requestScopedCtx, req, res);
     }
     if (method === "GET" && /^\/agents\/[^/]+\/activity(\?.*)?$/.test(url)) {
-      return handleAgentActivity(req, res);
+      return handleAgentActivity(requestScopedCtx, req, res);
     }
     if (method === "GET" && /^\/agents\/[^/]+\/activity\/[^/]+$/.test(url)) {
-      return handleActivityDetail(req, res);
+      return handleActivityDetail(requestScopedCtx, req, res);
     }
     if (method === "GET" && /^\/agents\/[^/]+\/approvals(\?.*)?$/.test(url)) {
-      return handleAgentApprovals(req, res);
+      return handleAgentApprovals(requestScopedCtx, req, res);
     }
     if (method === "PATCH" && /^\/agents\/[^/]+\/status$/.test(url)) {
-      return handleUpdateAgentStatus(req, res);
+      return handleUpdateAgentStatus(requestScopedCtx, req, res);
     }
     if (method === "GET" && /^\/agents\/[^/]+\/schedules(\?.*)?$/.test(url)) {
-      return handleListSchedules(req, res);
+      return handleListSchedules(requestScopedCtx, req, res);
     }
     if (method === "GET" && /^\/agents\/[^/]+\/schedules\/[^/]+$/.test(url)) {
-      return handleGetSchedule(req, res);
+      return handleGetSchedule(requestScopedCtx, req, res);
     }
     if (method === "POST" && /^\/agents\/[^/]+\/schedules$/.test(url)) {
-      return handleCreateSchedule(req, res);
+      return handleCreateSchedule(requestScopedCtx, req, res);
     }
     if (method === "PATCH" && /^\/agents\/[^/]+\/schedules\/[^/]+$/.test(url)) {
-      return handleUpdateSchedule(req, res);
+      return handleUpdateSchedule(requestScopedCtx, req, res);
     }
     if (method === "DELETE" && /^\/agents\/[^/]+\/schedules\/[^/]+$/.test(url)) {
-      return handleDeleteSchedule(req, res);
+      return handleDeleteSchedule(requestScopedCtx, req, res);
     }
     if (method === "POST" && /^\/agents\/[^/]+\/schedules\/[^/]+\/(pause|resume|disable)$/.test(url)) {
-      return handleScheduleAction(req, res);
+      return handleScheduleAction(requestScopedCtx, req, res);
     }
     if (method === "GET" && /^\/approvals(\?.*)?$/.test(url)) {
-      return handleListApprovals(req, res);
+      return handleListApprovals(requestScopedCtx, req, res);
     }
     if (method === "GET" && /^\/agents\/[^/]+\/executions(\?.*)?$/.test(url)) {
-      return handleAgentExecutions(req, res);
+      return handleAgentExecutions(requestScopedCtx, req, res);
     }
     if (method === "GET" && /^\/executions\/[^/]+$/.test(url)) {
-      return handleExecutionDetail(req, res);
+      return handleExecutionDetail(requestScopedCtx, req, res);
     }
     if (method === "GET" && /^\/agent-queue(\?.*)?$/.test(url)) {
-      return handleQueueStatus(req, res);
+      return handleQueueStatus(requestScopedCtx, req, res);
     }
     if (method === "POST" && /^\/executions\/[^/]+\/retry$/.test(url)) {
-      return handleRetryExecution(req, res);
+      return handleRetryExecution(requestScopedCtx, req, res);
     }
     if (method === "POST" && /^\/executions\/[^/]+\/cancel$/.test(url)) {
-      return handleCancelExecution(req, res);
+      return handleCancelExecution(requestScopedCtx, req, res);
     }
     json(res, { error: "not found" }, 404);
+    }); // End als.run
   });
 
-  async function handleListAgents(_req: any, res: any) {
-    const all = await agentStore.listByOwner(requestCtx.ownerId);
+  async function handleListAgents(ctx: RequestContext, _req: any, res: any) {
+    const all = await agentStore.listByOwner(ctx.ownerId!);
     const agentList = all.map((a) => ({
       id: a.id,
       displayName: a.displayName,
@@ -459,7 +494,7 @@ export async function createApiServer(options: ServerOptions) {
     return json(res, { agents: agentList });
   }
 
-  async function handleCreateAgent(req: any, res: any) {
+  async function handleCreateAgent(ctx: RequestContext, req: any, res: any) {
     let body: unknown;
     try {
       const text = await readBody(req);
@@ -499,7 +534,7 @@ export async function createApiServer(options: ServerOptions) {
       displayName: displayName.trim(),
       description,
       capabilities,
-      ownerId: requestCtx.ownerId,
+      ownerId: ctx.ownerId!,
       stellarAddress,
     });
 
@@ -509,22 +544,22 @@ export async function createApiServer(options: ServerOptions) {
     return json(res, { agent }, 201);
   }
 
-  async function handleAgentActivity(req: any, res: any) {
+  async function handleAgentActivity(ctx: RequestContext, req: any, res: any) {
     const urlObj = new URL(req.url ?? "", "http://localhost");
     const match = urlObj.pathname.match(/^\/agents\/([^/]+)\/activity$/);
     const agentId = match?.[1];
     if (!agentId) return json(res, { error: "invalid agent id in path" }, 400);
-    const allowed = await authorizationService.canAccessAgent(requestCtx, agentId);
+    const allowed = await authorizationService.canAccessAgent(ctx, agentId);
     if (!allowed) return json(res, { error: "not found" }, 404);
     const limit = Math.max(1, Math.min(100, Number(urlObj.searchParams.get("limit") ?? 50) || 50));
     const activity = await store.listByAgent(agentId, limit);
     return json(res, { agentId, activity });
   }
 
-  async function handleListApprovals(req: any, res: any) {
+  async function handleListApprovals(ctx: RequestContext, req: any, res: any) {
     const urlObj = new URL(req.url ?? "", "http://localhost");
     const statusFilter = urlObj.searchParams.get("status") ?? undefined;
-    const all = await approvals.listByOwner(requestCtx.ownerId, 200);
+    const all = await approvals.listByOwner(ctx.ownerId!, 200);
     const filtered = statusFilter
       ? all.filter((r) => r.status === statusFilter).slice(0, 50)
       : all.slice(0, 50);
@@ -532,12 +567,12 @@ export async function createApiServer(options: ServerOptions) {
   }
 
 
-  async function handleGetPolicy(req: any, res: any) {
+  async function handleGetPolicy(ctx: RequestContext, req: any, res: any) {
     const agentId = extractAgentIdFromPolicyUrl(req.url);
     if (!agentId) return json(res, { error: "invalid agent id in path" }, 400);
 
     if (!agents.has(agentId)) return json(res, { error: "agent not found" }, 404);
-    const canAccess = await authorizationService.canAccessAgent(requestCtx, agentId);
+    const canAccess = await authorizationService.canAccessAgent(ctx, agentId);
     if (!canAccess) return json(res, { error: "not found" }, 404);
 
     const metadata = await policyConfigStore.getWithMetadata(agentId);
@@ -553,12 +588,12 @@ export async function createApiServer(options: ServerOptions) {
     return json(res, { agentId, policy: DEFAULT_RULES, version: 0, updatedAt: null });
   }
 
-  async function handlePutPolicy(req: any, res: any) {
+  async function handlePutPolicy(ctx: RequestContext, req: any, res: any) {
     const agentId = extractAgentIdFromPolicyUrl(req.url);
     if (!agentId) return json(res, { error: "invalid agent id in path" }, 400);
 
     if (!agents.has(agentId)) return json(res, { error: "agent not found" }, 404);
-    const canAccess = await authorizationService.canAccessAgent(requestCtx, agentId);
+    const canAccess = await authorizationService.canAccessAgent(ctx, agentId);
     if (!canAccess) return json(res, { error: "not found" }, 404);
 
     let body: unknown;
@@ -579,7 +614,7 @@ export async function createApiServer(options: ServerOptions) {
     }
 
     const normalized = normalizePolicyRules(body as Partial<PolicyRules>);
-    const result = await policyConfigStore.upsert(agentId, requestCtx.ownerId, normalized);
+    const result = await policyConfigStore.upsert(agentId, ctx.ownerId!, normalized);
     return json(res, { agentId, policy: result.rules, version: result.version });
   }
 
@@ -589,14 +624,14 @@ export async function createApiServer(options: ServerOptions) {
   }
 
 
-  async function handleGetAgent(req: any, res: any) {
+  async function handleGetAgent(ctx: RequestContext, req: any, res: any) {
     const urlObj = new URL(req.url ?? "", "http://localhost");
     const match = urlObj.pathname.match(/^\/agents\/([^/]+)$/);
     const agentId = match?.[1];
     if (!agentId) return json(res, { error: "invalid agent id in path" }, 400);
-    const allowed = await authorizationService.canAccessAgent(requestCtx, agentId);
+    const allowed = await authorizationService.canAccessAgent(ctx, agentId);
     if (!allowed) return json(res, { error: "not found" }, 404);
-    const agent = await agentStore.getForOwner(agentId, requestCtx.ownerId);
+    const agent = await agentStore.getForOwner(agentId, ctx.ownerId!);
     if (!agent) return json(res, { error: "not found" }, 404);
     return json(res, {
       id: agent.id,
@@ -612,25 +647,25 @@ export async function createApiServer(options: ServerOptions) {
     });
   }
 
-  async function handleActivityDetail(req: any, res: any) {
+  async function handleActivityDetail(ctx: RequestContext, req: any, res: any) {
     const urlObj = new URL(req.url ?? "", "http://localhost");
     const match = urlObj.pathname.match(/^\/agents\/([^/]+)\/activity\/([^/]+)$/);
     const agentId = match?.[1];
     const activityId = match?.[2];
     if (!agentId || !activityId) return json(res, { error: "invalid path" }, 400);
-    const allowed = await authorizationService.canAccessAgent(requestCtx, agentId);
+    const allowed = await authorizationService.canAccessAgent(ctx, agentId);
     if (!allowed) return json(res, { error: "not found" }, 404);
-    const activity = await store.getForOwner(activityId, requestCtx.ownerId);
+    const activity = await store.getForOwner(activityId, ctx.ownerId!);
     if (!activity) return json(res, { error: "not found" }, 404);
     return json(res, { activity });
   }
 
-  async function handleAgentApprovals(req: any, res: any) {
+  async function handleAgentApprovals(ctx: RequestContext, req: any, res: any) {
     const urlObj = new URL(req.url ?? "", "http://localhost");
     const match = urlObj.pathname.match(/^\/agents\/([^/]+)\/approvals$/);
     const agentId = match?.[1];
     if (!agentId) return json(res, { error: "invalid agent id in path" }, 400);
-    const allowed = await authorizationService.canAccessAgent(requestCtx, agentId);
+    const allowed = await authorizationService.canAccessAgent(ctx, agentId);
     if (!allowed) return json(res, { error: "not found" }, 404);
     const statusFilter = urlObj.searchParams.get("status") ?? undefined;
     const all = await approvals.listByAgent(agentId, 200);
@@ -638,12 +673,12 @@ export async function createApiServer(options: ServerOptions) {
     return json(res, { agentId, approvals: filtered });
   }
 
-  async function handleUpdateAgentStatus(req: any, res: any) {
+  async function handleUpdateAgentStatus(ctx: RequestContext, req: any, res: any) {
     const urlObj = new URL(req.url ?? "", "http://localhost");
     const match = urlObj.pathname.match(/^\/agents\/([^/]+)\/status$/);
     const agentId = match?.[1];
     if (!agentId) return json(res, { error: "invalid agent id in path" }, 400);
-    const canChange = await authorizationService.canChangeAgentStatus(requestCtx, agentId);
+    const canChange = await authorizationService.canChangeAgentStatus(ctx, agentId);
     if (!canChange) return json(res, { error: "not found" }, 404);
     let body: unknown;
     try {
@@ -661,39 +696,39 @@ export async function createApiServer(options: ServerOptions) {
     return json(res, { id: agent.id, status: agent.status });
   }
 
-  async function handleListSchedules(req: any, res: any) {
+  async function handleListSchedules(ctx: RequestContext, req: any, res: any) {
     const urlObj = new URL(req.url ?? "", "http://localhost");
     const match = urlObj.pathname.match(/^\/agents\/([^/]+)\/schedules$/);
     const agentId = match?.[1];
     if (!agentId) return json(res, { error: "invalid agent id in path" }, 400);
-    const allowed = await authorizationService.canAccessAgent(requestCtx, agentId);
+    const allowed = await authorizationService.canAccessAgent(ctx, agentId);
     if (!allowed) return json(res, { error: "not found" }, 404);
     const limit = Math.max(1, Math.min(100, Number(urlObj.searchParams.get("limit") ?? 50) || 50));
     const all = await schedules.listByAgent(agentId, limit);
     return json(res, { agentId, schedules: all });
   }
 
-  async function handleGetSchedule(req: any, res: any) {
+  async function handleGetSchedule(ctx: RequestContext, req: any, res: any) {
     const urlObj = new URL(req.url ?? "", "http://localhost");
     const match = urlObj.pathname.match(/^\/agents\/([^/]+)\/schedules\/([^/]+)$/);
     const agentId = match?.[1];
     const scheduleId = match?.[2];
     if (!agentId || !scheduleId) return json(res, { error: "invalid path" }, 400);
-    const allowed = await authorizationService.canAccessAgent(requestCtx, agentId);
+    const allowed = await authorizationService.canAccessAgent(ctx, agentId);
     if (!allowed) return json(res, { error: "not found" }, 404);
     const schedule = await schedules.get(scheduleId);
-    if (!schedule || schedule.ownerId !== requestCtx.ownerId) {
+    if (!schedule || schedule.ownerId !== ctx.ownerId!) {
       return json(res, { error: "not found" }, 404);
     }
     return json(res, { schedule });
   }
 
-  async function handleCreateSchedule(req: any, res: any) {
+  async function handleCreateSchedule(ctx: RequestContext, req: any, res: any) {
     const urlObj = new URL(req.url ?? "", "http://localhost");
     const match = urlObj.pathname.match(/^\/agents\/([^/]+)\/schedules$/);
     const agentId = match?.[1];
     if (!agentId) return json(res, { error: "invalid agent id in path" }, 400);
-    const canCreate = await authorizationService.canCreateSchedule(requestCtx, agentId);
+    const canCreate = await authorizationService.canCreateSchedule(ctx, agentId);
     if (!canCreate) return json(res, { error: "not found" }, 404);
 
     let body: unknown;
@@ -724,7 +759,7 @@ export async function createApiServer(options: ServerOptions) {
     const schedule = await schedules.create({
       id: crypto.randomUUID(),
       agentId,
-      ownerId: requestCtx.ownerId,
+      ownerId: ctx.ownerId!,
       status: "active",
       intent,
       scheduleExpression,
@@ -738,13 +773,13 @@ export async function createApiServer(options: ServerOptions) {
     return json(res, { schedule }, 201);
   }
 
-  async function handleUpdateSchedule(req: any, res: any) {
+  async function handleUpdateSchedule(ctx: RequestContext, req: any, res: any) {
     const urlObj = new URL(req.url ?? "", "http://localhost");
     const match = urlObj.pathname.match(/^\/agents\/([^/]+)\/schedules\/([^/]+)$/);
     const agentId = match?.[1];
     const scheduleId = match?.[2];
     if (!agentId || !scheduleId) return json(res, { error: "invalid path" }, 400);
-    const canUpdate = await authorizationService.canUpdateSchedule(requestCtx, scheduleId);
+    const canUpdate = await authorizationService.canUpdateSchedule(ctx, scheduleId);
     if (!canUpdate) return json(res, { error: "not found" }, 404);
 
     let body: unknown;
@@ -771,20 +806,20 @@ export async function createApiServer(options: ServerOptions) {
     return json(res, { schedule: updated });
   }
 
-  async function handleDeleteSchedule(req: any, res: any) {
+  async function handleDeleteSchedule(ctx: RequestContext, req: any, res: any) {
     const urlObj = new URL(req.url ?? "", "http://localhost");
     const match = urlObj.pathname.match(/^\/agents\/([^/]+)\/schedules\/([^/]+)$/);
     const agentId = match?.[1];
     const scheduleId = match?.[2];
     if (!agentId || !scheduleId) return json(res, { error: "invalid path" }, 400);
-    const canDelete = await authorizationService.canDeleteSchedule(requestCtx, scheduleId);
+    const canDelete = await authorizationService.canDeleteSchedule(ctx, scheduleId);
     if (!canDelete) return json(res, { error: "not found" }, 404);
     const deleted = await schedules.delete(scheduleId);
     if (!deleted) return json(res, { error: "not found" }, 404);
     return json(res, { deleted: true });
   }
 
-  async function handleScheduleAction(req: any, res: any) {
+  async function handleScheduleAction(ctx: RequestContext, req: any, res: any) {
     const urlObj = new URL(req.url ?? "", "http://localhost");
     const match = urlObj.pathname.match(/^\/agents\/([^/]+)\/schedules\/([^/]+)\/(pause|resume|disable)$/);
     const agentId = match?.[1];
@@ -794,11 +829,11 @@ export async function createApiServer(options: ServerOptions) {
 
     let allowed: boolean;
     if (action === "pause") {
-      allowed = await authorizationService.canPauseSchedule(requestCtx, scheduleId);
+      allowed = await authorizationService.canPauseSchedule(ctx, scheduleId);
     } else if (action === "resume") {
-      allowed = await authorizationService.canResumeSchedule(requestCtx, scheduleId);
+      allowed = await authorizationService.canResumeSchedule(ctx, scheduleId);
     } else {
-      allowed = await authorizationService.canDisableSchedule(requestCtx, scheduleId);
+      allowed = await authorizationService.canDisableSchedule(ctx, scheduleId);
     }
     if (!allowed) return json(res, { error: "not found" }, 404);
 
@@ -810,33 +845,33 @@ export async function createApiServer(options: ServerOptions) {
     return json(res, { schedule: updated });
   }
 
-  async function handleAgentExecutions(req: any, res: any) {
+  async function handleAgentExecutions(ctx: RequestContext, req: any, res: any) {
     const urlObj = new URL(req.url ?? "", "http://localhost");
     const match = urlObj.pathname.match(/^\/agents\/([^/]+)\/executions$/);
     const agentId = match?.[1];
     if (!agentId) return json(res, { error: "invalid agent id in path" }, 400);
-    const allowed = await authorizationService.canAccessAgent(requestCtx, agentId);
+    const allowed = await authorizationService.canAccessAgent(ctx, agentId);
     if (!allowed) return json(res, { error: "not found" }, 404);
     const limit = Math.max(1, Math.min(100, Number(urlObj.searchParams.get("limit") ?? 50) || 50));
     const all = await executionStore.listByAgent(agentId, limit);
     return json(res, { agentId, executions: all });
   }
 
-  async function handleExecutionDetail(req: any, res: any) {
+  async function handleExecutionDetail(ctx: RequestContext, req: any, res: any) {
     const urlObj = new URL(req.url ?? "", "http://localhost");
     const match = urlObj.pathname.match(/^\/executions\/([^/]+)$/);
     const executionId = match?.[1];
     if (!executionId) return json(res, { error: "invalid execution id in path" }, 400);
-    const execution = await executionStore.getForOwner(executionId, requestCtx.ownerId);
+    const execution = await executionStore.getForOwner(executionId, ctx.ownerId!);
     if (!execution) return json(res, { error: "not found" }, 404);
     return json(res, { execution });
   }
 
-  async function handleQueueStatus(_req: any, res: any) {
+  async function handleQueueStatus(ctx: RequestContext, _req: any, res: any) {
     if (!executionQueue) {
       return json(res, { error: "execution queue not enabled" }, 404);
     }
-    const all = await executionStore.listByOwner(requestCtx.ownerId, 200);
+    const all = await executionStore.listByOwner(ctx.ownerId!, 200);
     const byStatus: Record<string, number> = {};
     for (const e of all) {
       byStatus[e.status] = (byStatus[e.status] ?? 0) + 1;
@@ -847,7 +882,7 @@ export async function createApiServer(options: ServerOptions) {
     });
   }
 
-  async function handleRetryExecution(req: any, res: any) {
+  async function handleRetryExecution(ctx: RequestContext, req: any, res: any) {
     const urlObj = new URL(req.url ?? "", "http://localhost");
     const match = urlObj.pathname.match(/^\/executions\/([^/]+)\/retry$/);
     const executionId = match?.[1];
@@ -857,7 +892,7 @@ export async function createApiServer(options: ServerOptions) {
       return json(res, { error: "execution queue not enabled" }, 404);
     }
 
-    const execution = await executionStore.getForOwner(executionId, requestCtx.ownerId);
+    const execution = await executionStore.getForOwner(executionId, ctx.ownerId!);
     if (!execution) return json(res, { error: "not found" }, 404);
 
     if (execution.status !== "failed" && execution.status !== "dead_letter") {
@@ -878,7 +913,7 @@ export async function createApiServer(options: ServerOptions) {
     return json(res, { execution: result.execution, message: "execution queued for retry" });
   }
 
-  async function handleCancelExecution(req: any, res: any) {
+  async function handleCancelExecution(ctx: RequestContext, req: any, res: any) {
     const urlObj = new URL(req.url ?? "", "http://localhost");
     const match = urlObj.pathname.match(/^\/executions\/([^/]+)\/cancel$/);
     const executionId = match?.[1];
@@ -888,7 +923,7 @@ export async function createApiServer(options: ServerOptions) {
       return json(res, { error: "execution queue not enabled" }, 404);
     }
 
-    const execution = await executionStore.getForOwner(executionId, requestCtx.ownerId);
+    const execution = await executionStore.getForOwner(executionId, ctx.ownerId!);
     if (!execution) return json(res, { error: "not found" }, 404);
 
     if (execution.status !== "queued" && execution.status !== "executing") {
@@ -903,7 +938,7 @@ export async function createApiServer(options: ServerOptions) {
     return json(res, { execution: result.execution, message: "execution cancelled" });
   }
 
-  async function handleIntent(req: any, res: any) {
+  async function handleIntent(ctx: RequestContext, req: any, res: any) {
     const agentId = extractAgentId(req.url);
     if (!agentId) return json(res, { error: "invalid agent id in path" }, 400);
 
@@ -932,7 +967,7 @@ export async function createApiServer(options: ServerOptions) {
     }
 
     if (!agents.has(agentId)) return json(res, { error: "agent not found" }, 404);
-    const canSubmit = await authorizationService.canSubmitIntent(requestCtx, agentId);
+    const canSubmit = await authorizationService.canSubmitIntent(ctx, agentId);
     if (!canSubmit) return json(res, { error: "not found" }, 404);
 
     // Idempotency key from header (scoped to owner+agent)
@@ -942,7 +977,7 @@ export async function createApiServer(options: ServerOptions) {
       if (idempotencyKey.length > 256) {
         return json(res, { error: "Idempotency-Key must be 256 characters or fewer" }, 400);
       }
-      const existing = await store.getByIdempotencyKey(requestCtx.ownerId, agentId, idempotencyKey);
+      const existing = await store.getByIdempotencyKey(ctx.ownerId!, agentId, idempotencyKey);
       if (existing) {
         // Same key + different intent → conflict
         const existingIntentJson = JSON.stringify(existing.intent);
@@ -958,13 +993,13 @@ export async function createApiServer(options: ServerOptions) {
     const decision = await policy.evaluate(intent, agentId);
 
     if (decision.result === "deny") {
-      const outcome = await pipeline.execute({ intent, sourceAccount: { agentId, ownerId: requestCtx.ownerId } as any, idempotencyKey });
+      const outcome = await pipeline.execute({ intent, sourceAccount: { agentId, ownerId: ctx.ownerId } as any, idempotencyKey });
       const denied = outcome.activityId ? await store.get(outcome.activityId) : null;
       return json(res, toIntentResponse(denied!), 403);
     }
 
     if (decision.result === "requires_approval") {
-      const outcome = await pipeline.execute({ intent, sourceAccount: { agentId, ownerId: requestCtx.ownerId } as any, idempotencyKey });
+      const outcome = await pipeline.execute({ intent, sourceAccount: { agentId, ownerId: ctx.ownerId } as any, idempotencyKey });
       if (outcome.status === "requires_approval" && outcome.activityId) {
         const pending = await store.get(outcome.activityId);
         assertNoSecrets(pending!);
@@ -995,7 +1030,7 @@ export async function createApiServer(options: ServerOptions) {
           sequenceNumber: () => account.sequence,
           incrementSequenceNumber: () => {},
           agentId,
-          ownerId: requestCtx.ownerId,
+          ownerId: ctx.ownerId!,
         };
       } catch (e) {
         throw new Error(`Unable to load source account: ${(e as Error).message}`);
@@ -1008,7 +1043,7 @@ export async function createApiServer(options: ServerOptions) {
 
     // Handle the failure case from getSourceAccount() inside the lock
     if (outcome.status === "failed") {
-      const failed = makeActivity(intent, agentId, requestCtx.ownerId, decision, "failed", null, outcome.message ?? "Unknown error");
+      const failed = makeActivity(intent, agentId, ctx.ownerId!, decision, "failed", null, outcome.message ?? "Unknown error");
       await store.record(failed);
       return json(res, toIntentResponse(failed), 502);
     }
@@ -1043,7 +1078,7 @@ export async function createApiServer(options: ServerOptions) {
     return json(res, toIntentResponse(rejected!), 403);
   }
 
-  async function handleApprove(req: any, res: any) {
+  async function handleApprove(ctx: RequestContext, req: any, res: any) {
     const approvalId = extractApprovalId(req.url);
     if (!approvalId) return json(res, { error: "invalid approval id in path" }, 400);
 
@@ -1059,14 +1094,15 @@ export async function createApiServer(options: ServerOptions) {
       return json(res, { message: "raw XDR and transaction blobs are not accepted at the approve endpoint" }, 400);
     }
 
-    const approver = typeof (body as any)?.approver === "string" ? (body as any).approver : undefined;
+    // Phase 28K-2: Actor from authenticated principal subject
+    const approver = ctx.principal?.subject ?? ctx.ownerId!;
 
     const approval = await approvals.get(approvalId);
     if (!approval) {
       return json(res, toApprovalResponse(approvalId, "", "rejected", "approval not found"), 404);
     }
 
-    const canApprove = await authorizationService.canApprove(requestCtx, approvalId);
+    const canApprove = await authorizationService.canApprove(ctx, approvalId);
     if (!canApprove) return json(res, toApprovalResponse(approvalId, "", "rejected", "approval not found"), 404);
 
     const transitionError = validateApprovalTransition(approval.status, "approved");
@@ -1124,7 +1160,7 @@ export async function createApiServer(options: ServerOptions) {
 
   }
 
-  async function handleReject(req: any, res: any) {
+  async function handleReject(ctx: RequestContext, req: any, res: any) {
     const approvalId = extractApprovalId(req.url);
     if (!approvalId) return json(res, { error: "invalid approval id in path" }, 400);
 
@@ -1145,7 +1181,7 @@ export async function createApiServer(options: ServerOptions) {
       return json(res, toApprovalResponse(approvalId, "", "rejected", "approval not found"), 404);
     }
 
-    const canReject = await authorizationService.canReject(requestCtx, approvalId);
+    const canReject = await authorizationService.canReject(ctx, approvalId);
     if (!canReject) return json(res, toApprovalResponse(approvalId, "", "rejected", "approval not found"), 404);
 
     const transitionError = validateApprovalTransition(approval.status, "rejected");

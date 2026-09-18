@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createApiServer } from "../src/index.js";
 import type { Signer } from "@4evergent/stellar";
 import type { PolicyRules } from "@4evergent/shared";
+import { DevAuthProvider } from "@4evergent/shared";
 
 class MockSigner implements Signer {
   private id: string;
@@ -41,7 +42,7 @@ async function startServer(opts?: { signer?: Signer; ownerId?: string; agentId?:
     port: 0,
     horizonUrl: "https://horizon-testnet.stellar.org",
     signer,
-    requestContext: { ownerId },
+    authProvider: new DevAuthProvider({ defaultOwnerId: ownerId }),
   });
   server.registerAgent(makeAgent(agentId, ownerId));
 
