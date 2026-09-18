@@ -42,7 +42,7 @@ export default function Approvals() {
               <td>
                 <button
                   disabled={loadingId === a.id}
-                  onClick={() => { setLoadingId(a.id); api.approve(a.id, 'dashboard').finally(() => setLoadingId(null)); }}
+                  onClick={() => { setLoadingId(a.id); api.approve(a.id).finally(() => setLoadingId(null)); }}
                 >
                   {loadingId === a.id ? 'Processing...' : 'Approve'}
                 </button>

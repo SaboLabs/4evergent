@@ -1,24 +1,54 @@
 const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:3000';
+import { getStoredToken, clearAuth } from './auth';
 
 export class ApiError extends Error {
-  constructor(public status: number, message: string) {
+  status: number;
+  constructor(status: number, message: string) {
     super(message);
     this.name = 'ApiError';
+    this.status = status;
   }
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const token = getStoredToken();
+  const baseHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
+
+  // Merge any custom headers
+  if (init?.headers) {
+    const customHeaders = new Headers(init.headers);
+    customHeaders.forEach((value, key) => {
+      baseHeaders[key] = value;
+    });
+  }
+
+  // Add Authorization if token exists
+  if (token) {
+    baseHeaders['Authorization'] = `Bearer ${token}`;
+  }
+
   const res = await fetch(`${API_BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
+    headers: baseHeaders,
     keepalive: false,
     ...init,
   });
   const body = res.status !== 204 ? await res.json() : null;
   if (!res.ok) {
     const message = body?.error ?? `API error ${res.status}`;
+    if (res.status === 401) {
+      clearAuth();
+    }
     throw new ApiError(res.status, message);
   }
   return body as T;
+}
+
+export function isUnauthorizedError(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 401;
+}
+
+export function isForbiddenError(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 403;
 }
 
 import type {
@@ -98,10 +128,10 @@ export const api = {
     return request<{ approvals: ApprovalRecord[] }>(`/approvals${qs}`);
   },
 
-  approve: (approvalId: string, approver?: string) =>
+  approve: (approvalId: string) =>
     request<{ approvalId: string; activityId: string; status: string; message: string }>(
       `/approvals/${encodeURIComponent(approvalId)}/approve`,
-      { method: 'POST', body: JSON.stringify({ approver }) }
+      { method: 'POST', body: JSON.stringify({}) }
     ),
 
   reject: (approvalId: string) =>
