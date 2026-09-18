@@ -21,6 +21,8 @@ export interface PipelineOptions {
   approvalStore?: ApprovalStore;
   policyRules?: Partial<PolicyRules>;
   approvalTtlSeconds?: number;
+  /** Shared policy resolver. When provided, pipeline resolves per-agent rules at execution time. */
+  policyResolver?: (agentId: string) => Promise<PolicyRules>;
 }
 
 export interface PipelineExecuteInput {
@@ -39,6 +41,7 @@ export class TransactionPipeline {
   private approvalStore?: ApprovalStore;
   private approvalTtlSeconds: number;
   private horizonUrl: string;
+  private policyResolver?: (agentId: string) => Promise<PolicyRules>;
 
   constructor(options: PipelineOptions) {
     this.builder = new StellarTransactionBuilder();
@@ -49,7 +52,9 @@ export class TransactionPipeline {
     this.activityStore = options.activityStore;
     this.approvalStore = options.approvalStore;
     this.approvalTtlSeconds = options.approvalTtlSeconds ?? 86400;
-    this.policy = new PolicyEngine(options.policyRules, options.activityStore as any);
+    this.policyResolver = options.policyResolver;
+    // PolicyEngine uses getRules callback for per-agent resolution; falls back to defaultRules
+    this.policy = new PolicyEngine(options.policyRules, options.activityStore as any, options.policyResolver);
   }
 
   async execute(input: PipelineExecuteInput): Promise<PipelineOutcome> {
@@ -67,6 +72,7 @@ export class TransactionPipeline {
 
     const agentId = (sourceAccount as any)?.agentId ?? (sourceAccount as any)?.accountId?.() ?? "unknown";
     const ownerId = (sourceAccount as any)?.ownerId ?? "unknown";
+    // Resolve policy at execution time — uses policyResolver if provided
     const decision = await this.policy.evaluate(intent, agentId);
 
     if (decision.result === "deny") {
@@ -205,6 +211,13 @@ export class TransactionPipeline {
     }
   }
 
+  /**
+   * executeApproved — re-evaluates CURRENT policy before execution.
+   *
+   * SECURITY: Approval does NOT bypass policy. The intent is re-evaluated against
+   * the agent's CURRENT policy at execution time. If policy was tightened between
+   * approval and execution, the execution is denied.
+   */
   async executeApproved(approvalId: string, approver?: string): Promise<PipelineOutcome> {
     if (!this.approvalStore || !this.activityStore) {
       return {
@@ -251,6 +264,23 @@ export class TransactionPipeline {
         message: "Approval has expired",
         policyDecision: { result: "deny", reason: "expired", rule: "approval", intent: null as any },
         simulationResult: null,
+      };
+    }
+
+    // CRITICAL: Re-evaluate CURRENT policy at execution time.
+    // Approval does NOT grant a bypass — if policy was tightened since approval,
+    // the intent must be denied.
+    // skipReservation: daily spending was already reserved at intent-creation time.
+    // Re-evaluating here must NOT double-reserve.
+    const currentDecision = await this.policy.evaluate(approval.intent, approval.agentId, { skipReservation: true });
+    if (currentDecision.result === "deny") {
+      await this.approvalStore.update(approvalId, { status: "failed", error: `Policy re-evaluation denied: ${currentDecision.reason}` });
+      return {
+        status: "rejected",
+        message: `Policy re-evaluation denied: ${currentDecision.reason}`,
+        policyDecision: currentDecision,
+        simulationResult: null,
+        activityId: approval.activityId,
       };
     }
 
@@ -334,7 +364,7 @@ export class TransactionPipeline {
       return {
         status: "submitted",
         message: `Transaction submitted: ${result.hash}`,
-        policyDecision: { result: "allow", reason: "executed", rule: "approval", intent },
+        policyDecision: currentDecision,
         simulationResult: simResult,
         txHash: result.hash,
         activityId: approval.activityId,

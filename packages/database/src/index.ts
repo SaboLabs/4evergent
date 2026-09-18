@@ -385,6 +385,11 @@ export type { ScheduleValidationResult } from "./schedule-validation.js";
 export { InMemoryAgentStore, SQLiteAgentStore } from "./agent-store.js";
 export type { AgentStore, CreateAgentInput } from "./agent-types.js";
 
+// Policy configuration stores (Phase 28A)
+export { SQLitePolicyConfigStore } from "./policy-config-store.js";
+export { InMemoryPolicyConfigStore } from "./in-memory-policy-config-store.js";
+export type { PolicyConfigStore } from "./policy-config-store.js";
+
 // Execution queue stores + types
 export { InMemoryExecutionStore, SQLiteExecutionStore } from "./execution-store.js";
 export type { ExecutionStore, ExecutionRecord, ExecutionStatus } from "./execution-types.js";
