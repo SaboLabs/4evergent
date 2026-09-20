@@ -14,15 +14,45 @@
  *
  * LIVE_SUBMIT must be explicitly set to "1" to enable real Testnet submission.
  *
- * PHASE 28I: Authentication uses DevAuthProvider.
- * Owner identity comes from DEV_OWNER_ID env var, NOT hardcoded.
+ * AUTH MODE:
+ *   Development (default):
+ *     DevAuthProvider is used. Any request is auto-authenticated.
+ *
+ *   Production:
+ *     Set API_KEYS environment variable to enable production auth.
+ *     Format: API_KEYS=key1:owner1:subject1,key2:owner2:subject2
+ *     ProductionApiKeyAuthProvider validates Bearer tokens against configured keys.
+ *
+ *   Production mode requires valid API key for ALL requests.
  */
 
 import { createApiServer } from "./index.js";
 import { TestnetLocalSigner, TESTNET_HORIZON_URL } from "@4evergent/stellar";
-import { DevAuthProvider } from "@4evergent/shared";
+import { DevAuthProvider, ProductionApiKeyAuthProvider } from "@4evergent/shared";
 
 const TESTNET_PASSPHRASE = "Test SDF Network ; September 2015";
+
+function parseApiKeys(envVar: string | undefined): Record<string, { ownerId: string; subject: string }> | null {
+  if (!envVar) return null;
+  const keys: Record<string, { ownerId: string; subject: string }> = {};
+  const entries = envVar.split(",").map((e) => e.trim()).filter(Boolean);
+  
+  for (const entry of entries) {
+    const parts = entry.split(":");
+    if (parts.length < 2) {
+      console.error(`FATAL: Invalid API_KEYS format. Expected key:ownerId[:subject], got: ${entry}`);
+      process.exit(1);
+    }
+    const [key, ownerId, subject] = parts;
+    if (!key || !ownerId) {
+      console.error(`FATAL: API key and ownerId are required. Got: ${entry}`);
+      process.exit(1);
+    }
+    keys[key] = { ownerId, subject: subject || `key:${key.slice(0, 8)}` };
+  }
+  
+  return Object.keys(keys).length > 0 ? keys : null;
+}
 
 async function main() {
   const horizonUrl = process.env.STELLAR_HORIZON_URL || TESTNET_HORIZON_URL;
@@ -46,11 +76,17 @@ async function main() {
     process.exit(1);
   }
 
-  // PHASE 28I: Development auth provider.
-  // Identity comes from explicit configuration, NOT hardcoded in source.
-  const authProvider = new DevAuthProvider({
-    defaultOwnerId: devOwnerId,
-  });
+  // Phase 28T: Production auth provider selection
+  const apiKeys = parseApiKeys(process.env.API_KEYS);
+  let authProvider;
+
+  if (apiKeys) {
+    authProvider = new ProductionApiKeyAuthProvider({ apiKeys });
+    console.log(`[4evergent] Auth: production (${Object.keys(apiKeys).length} API key(s) configured)`);
+  } else {
+    authProvider = new DevAuthProvider({ defaultOwnerId: devOwnerId });
+    console.log(`[4evergent] Auth: development (ownerId: ${devOwnerId})`);
+  }
 
   console.log(`[4evergent] Starting API server on port ${port}`);
   console.log(`[4evergent] Horizon: ${horizonUrl}`);
@@ -58,7 +94,6 @@ async function main() {
   console.log(`[4evergent] Signer: ${signer.getAccountId().slice(0, 12)}...`);
   console.log(`[4evergent] Database: ${dbPath ?? "in-memory"}`);
   console.log(`[4evergent] Live submission: ${process.env.LIVE_SUBMIT === "1" ? "ENABLED" : "disabled"}`);
-  console.log(`[4evergent] Auth: development (ownerId: ${devOwnerId})`);
 
   try {
     const server = await createApiServer({
