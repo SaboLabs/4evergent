@@ -127,6 +127,6 @@ No live Stellar testnet calls were executed during Phase 2 and Phase 3 implement
 ### Known Limitations (Phase 4 additions)
 
 - **Frontend trust boundary**: The dashboard never receives private keys, seeds, secrets, or raw XDR. All policy evaluation, signing, and submission remain server-side.
-- **Approval ownership**: Not authenticated — any party with `approvalId` can approve/reject through the UI (backend limitation, not fixed in UI).
-- **Intent submission**: Only XLM payment is exposed. No UI for trustline, contract_call, account_settings, or raw XDR.
+- **Approval ownership**: Approve/reject endpoints are authenticated and owner-scoped (request-scoped authentication via `Authorization` header; `canApprove`/`canReject` verify the caller owns the agent). Historical note: before Phase 28K these endpoints were unauthenticated.
+- **Intent submission**: The Submit page supports XLM payment and trustline intents (Phase 12). No UI for contract_call, account_settings, or raw XDR.
 - **Frontend does NOT bypass the approval state machine** — Approve/Reject buttons call the same backend endpoints that enforce transitions.
