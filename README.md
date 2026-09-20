@@ -105,6 +105,7 @@ Key guarantees:
 - **Approval thresholds**: amounts above a configurable limit require human approval.
 - **Key management**: private keys never in source, env examples, logs, or tests.
 - **Frontend/backend trust boundary**: the frontend never receives secret material; all signing happens server-side through a hardened path.
+- **API authentication**: development mode auto-authenticates a single owner; production mode requires `Authorization: Bearer <key>` with keys configured server-side via `API_KEYS` (format `key:ownerId[:subject]`, comma-separated). See [docs/security-model.md](docs/security-model.md) — API Authentication.
 
 ## Local development
 

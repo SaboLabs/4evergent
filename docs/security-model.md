@@ -177,6 +177,48 @@ ApprovalRecord {
 
 **Known Limitation:** Identity mechanism is abstraction-ready but NOT production-ready. No OAuth/JWT/wallet auth implemented.
 
+## API Authentication (Development vs Production)
+
+The API server supports two authentication modes, selected by environment
+configuration at startup:
+
+### Development mode (default)
+
+When `API_KEYS` is not set, `DevAuthProvider` authenticates every request as a
+single development owner (`DEV_OWNER_ID`, default `operator`). This mode exists
+for local development and testing only. The dashboard does not require a token.
+
+### Production mode
+
+When `API_KEYS` is set, `ProductionApiKeyAuthProvider` validates requests via
+the `Authorization: Bearer <key>` header. Each API key maps to exactly one
+server-configured identity.
+
+```
+API_KEYS=<key>:<ownerId>:<subject>,<key>:<ownerId>:<subject>
+```
+
+- Entries are separated by `,`; fields within an entry by `:`.
+- `key` — the credential secret. Generate a cryptographically random value,
+  store it as a server-side secret, never commit it, never log it.
+- `ownerId` — the owner identity the key maps to. Comes **only** from this
+  server-side configuration; a client can never choose or override its
+  `ownerId` (verified by `production-auth.test.ts`).
+- `subject` — optional identity metadata for the authenticated request.
+  Defaults to `key:<first 8 chars>` when omitted.
+
+Behavior:
+
+- Invalid credentials (missing/malformed header, unknown key) → request is
+  unauthenticated; protected endpoints return `401`.
+- Malformed `API_KEYS` configuration (entry without `key:ownerId`) → the server
+  **fails fast at startup** (`process.exit(1)`). It never silently falls back
+  to `DevAuthProvider` in production mode.
+- An empty `API_KEYS` value is treated as unset → development mode.
+
+See `packages/shared/src/production-auth.ts` and
+`apps/api/src/server.ts` for the implementation.
+
 ## Emergency Disable Mechanism
 
 (Future work in MVP, but planned as a core primitive)
