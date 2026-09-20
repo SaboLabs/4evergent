@@ -131,7 +131,10 @@ pnpm test
 ### Run the API server (Testnet)
 
 ```bash
-# Set required environment
+# Option A: put STELLAR_TESTNET_SECRET_KEY in .env (loaded automatically)
+cp .env.example .env   # then edit .env
+
+# Option B: export it in your shell
 export STELLAR_TESTNET_SECRET_KEY=S...  # your testnet secret key
 
 # Build and start

@@ -21,6 +21,14 @@ cp .env.example .env
 # Edit .env with your testnet credentials
 ```
 
+The API server loads `.env` from the repository root automatically
+(`node --env-file-if-exists`) when started via `pnpm --filter @4evergent/api start`
+or `pnpm --filter @4evergent/api dev`. Real environment variables always take
+precedence over `.env` values. `.env` is gitignored — never commit it.
+
+Note: the live smoke test and direct `node` invocations do NOT load `.env`;
+export variables in your shell for those (`export STELLAR_TESTNET_SECRET_KEY=...`).
+
 ### 3. Verify Horizon Testnet connectivity
 
 ```bash
