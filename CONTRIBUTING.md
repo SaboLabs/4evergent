@@ -80,8 +80,9 @@ Every capability must include:
 - All relative imports use explicit `.ts` extensions (Node ESM).
 - Use `Exact Optional Property Types` — no implicit `undefined`.
 - Prefer pure functions for policy/engine logic.
-- Lint: `pnpm lint` (when eslint is set up).
-- Format: `pnpm format` (prettier — future).
+- No linter/formatter is configured yet; rely on `pnpm typecheck` (strict mode)
+  and the style rules above. A linter may be introduced later — do not add
+  lint tooling in unrelated PRs.
 
 ## PR expectations
 
