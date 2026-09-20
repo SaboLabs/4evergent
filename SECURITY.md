@@ -12,7 +12,9 @@ Instead, use one of these channels:
    - Go to the repository Security tab → "Report a vulnerability"
    - This creates a private advisory visible only to maintainers
 
-2. **Direct contact** — if GitHub private reporting is not available, reach out to the maintainers through the project's official channels (Discord, Twitter/X, or email listed in the README)
+2. **GitHub Security Advisory draft** — if private reporting is not available,
+   open a draft security advisory on the repository, or contact the maintainers
+   through the SaboLabs organization on GitHub
 
 ### What to include
 

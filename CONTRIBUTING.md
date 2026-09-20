@@ -12,6 +12,9 @@ cd 4evergent
 # install (Node 22+, pnpm 10+)
 pnpm install
 
+# optional: local environment (loaded automatically by the API server)
+cp .env.example .env
+
 # build all packages
 pnpm build
 ```
@@ -33,7 +36,6 @@ pnpm build
 │   ├── agent-registry/   # Soroban agent-registry contract (scaffolded, not compiled)
 │   └── permissions/      # Soroban permissions contract (scaffolded, not compiled)
 ├── docs/
-├── tests/
 ├── scripts/
 └── README.md
 ```
@@ -114,8 +116,12 @@ Use these labels when filing issues:
 If you find a security vulnerability:
 
 1. Do NOT open a public issue.
-2. Email the maintainers at `security@4evergent.dev` (placeholder) or DM on Discord.
+2. Report it through GitHub's private vulnerability reporting on the
+   [SaboLabs/4evergent repository](https://github.com/SaboLabs/4evergent/security/advisories/new)
+   (Security tab → "Report a vulnerability"). If that mechanism is
+   unavailable, open a GitHub security advisory draft or contact the
+   repository maintainers via the SaboLabs organization on GitHub.
 3. Include: description, reproduction steps, potential impact.
 4. You will receive a response within 48 hours.
 
-All security reports are eligible for a vulnerability disclosure acknowledgement.
+See [SECURITY.md](SECURITY.md) for the full policy.
