@@ -113,7 +113,7 @@ Key guarantees:
 git clone https://github.com/SaboLabs/4evergent
 cd 4evergent
 
-# install (Node 22+, pnpm 9+, frozen lockfile for reproducible builds)
+# install (Node 22+, pnpm 10+, frozen lockfile for reproducible builds)
 pnpm install --frozen-lockfile
 
 # build all packages
@@ -126,7 +126,7 @@ pnpm test
 ### Prerequisites
 
 - **Node.js >= 22** (required for `node:sqlite` built-in module)
-- **pnpm >= 9** (workspace package manager)
+- **pnpm >= 10** (workspace package manager; matches CI)
 
 ### Run the API server (Testnet)
 

@@ -44,10 +44,10 @@ All decisions recorded via the ADR-lite convention. Each entry: **Status | Conte
 **Decision:** MVP contains no token, no token sale, no bonding curve, no speculative mechanics. All actions use XLM or native testnet assets.  
 **Consequences:** Avoids regulatory surface and keeps focus on the permissioned-execution layer.
 
-## ADR-007: Node 26 + tsx for test runner
+## ADR-007: tsx test runner with explicit `.ts` import extensions
 
 **Status:** Accepted  
-**Context:** Node.js 26 ESM requires explicit `.ts` extensions for local imports when running via tsx without a bundler.  
+**Context:** Node.js ESM (verified on Node 26 during initial development; the supported runtime is Node 22+) requires explicit `.ts` extensions for local imports when running via tsx without a bundler.  
 **Decision:** All intra-project relative imports use `.ts` extensions. Test runner is `tsx --test`.  
 **Consequences:** Tests run without a separate build step. Production build uses `tsc` which rewrites extensions appropriately, or a bundler handles it.
 

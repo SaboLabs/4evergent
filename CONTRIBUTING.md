@@ -9,7 +9,7 @@ Thank you for contributing. This document covers development setup, repository s
 git clone https://github.com/SaboLabs/4evergent
 cd 4evergent
 
-# install (Node 26+, pnpm 10+)
+# install (Node 22+, pnpm 10+)
 pnpm install
 
 # build all packages
