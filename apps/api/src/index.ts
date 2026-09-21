@@ -970,6 +970,17 @@ export async function createApiServer(options: ServerOptions) {
     const canSubmit = await authorizationService.canSubmitIntent(ctx, agentId);
     if (!canSubmit) return json(res, { error: "not found" }, 404);
 
+    // Agent status admission boundary: only ACTIVE agents accept NEW intents.
+    // Reads the CURRENT status from the persistent agent store so a paused or
+    // disabled agent is rejected before policy evaluation, activity records,
+    // or execution-queue entries are created. In-flight executions are not
+    // affected — this gate only applies at intent submission time.
+    const agent = await agentStore.get(agentId);
+    if (!agent) return json(res, { error: "agent not found" }, 404);
+    if (agent.status !== "active") {
+      return json(res, { error: `agent is ${agent.status}; new intents are rejected` }, 409);
+    }
+
     // Idempotency key from header (scoped to owner+agent)
     const idempotencyKey = extractHeader(req, "Idempotency-Key");
     if (idempotencyKey) {

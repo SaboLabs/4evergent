@@ -238,3 +238,142 @@ test("AUTHZ: GET /agents/:id/approvals — non-owner cannot list", async () => {
     await close();
   }
 });
+
+// ---------------------------------------------------------------------------
+// Agent status admission boundary — new intents
+// ---------------------------------------------------------------------------
+
+async function postIntent(baseUrl: string, agentId: string) {
+  const res = await fetch(`${baseUrl}/agents/${agentId}/intents`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      type: "payment",
+      asset: "XLM",
+      destination: "GDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      // amount 50 ≥ approvalThreshold(10) so the pipeline returns 202
+      // requires_approval — fully offline and deterministic, no Horizon
+      // submission attempted under deferExecution.
+      amount: "50",
+      reason: "status boundary test",
+    }),
+  });
+  return { status: res.status, body: await res.json() };
+}
+
+test("STATUS: active agent accepts new intents (existing behavior unchanged)", async () => {
+  const { baseUrl, close, registerAgent } = await startServer({
+    authProvider: new DevAuthProvider({ defaultOwnerId: "owner-a" }),
+  });
+  registerAgent(makeAgent("agent-a", "owner-a", "active"));
+  try {
+    const res = await postIntent(baseUrl, "agent-a");
+    // Active agent: intent passes status gate and enters the pipeline.
+    // amount 50 ≥ threshold(10) → requires_approval → 202 with approvalId.
+    assert.equal(res.status, 202);
+    assert.equal(res.body.agentId, "agent-a");
+    assert.ok(res.body.approvalId, "approval id must be created for active agent");
+  } finally {
+    await close();
+  }
+});
+
+test("STATUS: paused agent rejects new intents with 409", async () => {
+  const { baseUrl, close, registerAgent } = await startServer({
+    authProvider: new DevAuthProvider({ defaultOwnerId: "owner-a" }),
+  });
+  registerAgent(makeAgent("agent-a", "owner-a", "paused"));
+  try {
+    const res = await postIntent(baseUrl, "agent-a");
+    assert.equal(res.status, 409);
+    assert.match(res.body.error, /paused/);
+
+    // No activity record may exist for the rejected intent.
+    const activity = await get(baseUrl, "/agents/agent-a/activity");
+    assert.equal(activity.body.activity.length, 0, "no activity for paused agent");
+  } finally {
+    await close();
+  }
+});
+
+test("STATUS: disabled agent rejects new intents with 409", async () => {
+  const { baseUrl, close, registerAgent } = await startServer({
+    authProvider: new DevAuthProvider({ defaultOwnerId: "owner-a" }),
+  });
+  registerAgent(makeAgent("agent-a", "owner-a", "disabled"));
+  try {
+    const res = await postIntent(baseUrl, "agent-a");
+    assert.equal(res.status, 409);
+    assert.match(res.body.error, /disabled/);
+
+    // No activity record may exist for the rejected intent.
+    const activity = await get(baseUrl, "/agents/agent-a/activity");
+    assert.equal(activity.body.activity.length, 0, "no activity for disabled agent");
+  } finally {
+    await close();
+  }
+});
+
+test("STATUS: paused via PATCH then submit is rejected (lifecycle change applies live)", async () => {
+  const { baseUrl, close, registerAgent } = await startServer({
+    authProvider: new DevAuthProvider({ defaultOwnerId: "owner-a" }),
+  });
+  registerAgent(makeAgent("agent-a", "owner-a", "active"));
+  try {
+    // Active: accepted into the pipeline.
+    const before = await postIntent(baseUrl, "agent-a");
+    assert.equal(before.status, 202);
+
+    // Pause the agent.
+    const paused = await patch(baseUrl, "/agents/agent-a/status", { status: "paused" });
+    assert.equal(paused.status, 200);
+    assert.equal(paused.body.status, "paused");
+
+    // New intent is now rejected — current status read from the store.
+    const after = await postIntent(baseUrl, "agent-a");
+    assert.equal(after.status, 409);
+    assert.match(after.body.error, /paused/);
+
+    // Resume — new intents flow again.
+    const resumed = await patch(baseUrl, "/agents/agent-a/status", { status: "active" });
+    assert.equal(resumed.status, 200);
+    const resumedIntent = await postIntent(baseUrl, "agent-a");
+    assert.equal(resumedIntent.status, 202);
+  } finally {
+    await close();
+  }
+});
+
+test("STATUS: owner isolation — cannot bypass enforcement via another owner's agent", async () => {
+  const { baseUrl, close, registerAgent } = await startServer({
+    authProvider: new DevAuthProvider({ defaultOwnerId: "owner-a" }),
+  });
+  registerAgent(makeAgent("agent-b", "owner-b", "paused"));
+  try {
+    // owner-a submitting to owner-b's paused agent: 404 (ownership), not 409,
+    // so the status gate never leaks cross-owner state.
+    const res = await postIntent(baseUrl, "agent-b");
+    assert.equal(res.status, 404);
+  } finally {
+    await close();
+  }
+});
+
+test("STATUS: paused agent intent creates no execution-queue entry", async () => {
+  const { baseUrl, close, registerAgent } = await startServer({
+    authProvider: new DevAuthProvider({ defaultOwnerId: "owner-a" }),
+  });
+  registerAgent(makeAgent("agent-a", "owner-a", "paused"));
+  try {
+    const res = await postIntent(baseUrl, "agent-a");
+    assert.equal(res.status, 409);
+
+    // No execution record may exist for this agent — rejection happens
+    // before any execution record or queue processing is created.
+    const executions = await get(baseUrl, "/agents/agent-a/executions");
+    assert.equal(executions.status, 200);
+    assert.equal(executions.body.executions.length, 0, "no execution records after rejection");
+  } finally {
+    await close();
+  }
+});
