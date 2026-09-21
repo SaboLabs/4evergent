@@ -112,10 +112,44 @@ Or check on [Stellar Expert](https://stellar.expert/explorer/testnet) with your 
 ```bash
 # Without secrets — only verify network + simulation
 npx tsx packages/stellar/test/live-smoke.ts
-
-# With secrets + LIVE_SUBMIT — full pipeline with real transaction
-STELLAR_TESTNET_SECRET_KEY=S... LIVE_SUBMIT=1 npx tsx packages/stellar/test/live-smoke.ts
 ```
+
+## Live End-to-End Test
+
+Full live E2E validation (signing + submission + on-chain confirmation +
+reconciliation). Runs against the real Stellar Testnet.
+
+```bash
+# OPT-IN GATES (both required):
+#   - STELLAR_TESTNET_SECRET_KEY: funded TESTNET key (never committed)
+#   - LIVE_SUBMIT=1: explicit live submission enable
+
+# 1. Fund a testnet account (once):
+#    node -e "const {Keypair}=require('@stellar/stellar-sdk'); const k=Keypair.random(); console.log(k.secret());" > /tmp/stellar-secret
+#    curl "https://friendbot.stellar.org?addr=<PUBLIC_KEY_FROM_ABOVE>"
+
+# 2. Run live E2E:
+STELLAR_TESTNET_SECRET_KEY=$(cat /tmp/stellar-secret) LIVE_SUBMIT=1 \
+  npx tsx packages/stellar/test/live-e2e.ts
+```
+
+Expected output (all 8 steps pass):
+```
+network: Test SDF Network ; September 2015
+network_guard: testnet=accept, mainnet=reject
+policy: allow
+simulation: success
+outcome: submitted
+tx_hash: <64-hex>
+submission: submitted
+confirmation: confirmed in ledger <N>
+reconciliation: submitted → confirmed
+result: PASS
+```
+
+Without `STELLAR_TESTNET_SECRET_KEY` the script runs the network + simulation
+preflight only and stops before signing. Without `LIVE_SUBMIT=1` it stops
+before submission (simulation gate verified, no real transaction sent).
 
 ## Testnet Local Signer
 

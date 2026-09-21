@@ -38,7 +38,7 @@ export class StellarAdapter {
       : undefined;
     return {
       address: data.id,
-      sequence: data.sequence_number,
+      sequence: data.sequence,
       balances: data.balances.map((b: Record<string, unknown>) => ({
         asset: formatAsset(b),
         balance: String(b.balance ?? "0"),
