@@ -63,9 +63,10 @@ Stellar is purpose-built for asset issuance and payments with native low-fee, fa
 4evergent/
 ├── apps/
 │   ├── web/              # React + TS frontend (agent dashboard)
-│   └── api/              # Express-style backend API
+│   ├── api/              # Express-style backend API
+│   └── cli/              # Operator CLI (HTTP client) — see [docs/cli.md](docs/cli.md)
 ├── packages/
-│   ├── agent-core/       # Agent runtime, intent validation, Stellar adapter
+│   ├── agent-core/      # Agent runtime, intent validation, Stellar adapter
 │   ├── policy/           # Deterministic authorization engine
 │   ├── stellar/          # Transaction construction + simulation + submission + reconciliation + network guard
 │   ├── database/         # In-memory + SQLite stores (activity, approvals, agents, executions)
@@ -78,7 +79,8 @@ Stellar is purpose-built for asset issuance and payments with native low-fee, fa
 │   ├── security-model.md
 │   ├── capabilities.md
 │   ├── roadmap.md
-│   └── testnet.md
+│   ├── testnet.md
+│   └── cli.md
 └── README.md
 ```
 
@@ -210,6 +212,32 @@ curl -X POST http://localhost:3000/agents/<agent-id>/schedules/<schedule-id>/dis
 
 Schedules are stored in SQLite (when `dbPath` is configured) or in-memory. The scheduler polls every 60 seconds by default. Failed schedules do not stop the scheduler.
 
+## Operator CLI
+
+The `4evergent` CLI is an operator client that talks HTTP to the API server.
+It does NOT sign, build, or submit Stellar transactions — all transaction
+work stays server-side.
+
+```bash
+# Build and run (from repo root)
+pnpm --filter @4evergent/cli build
+npx tsx apps/cli/src/cli.ts health
+
+# Configure
+export FOREGENT_API_URL=http://localhost:3000
+export FOREGENT_API_KEY=your-api-key
+
+# Usage
+4evergent health
+4evergent agent list
+4evergent agent pause <id>
+4evergent approval list
+4evergent approval approve <id>
+4evergent execution list
+```
+
+See [docs/cli.md](docs/cli.md) for full command reference.
+
 ## Roadmap
 
 | Phase | Goal | Status |
@@ -226,6 +254,7 @@ Schedules are stored in SQLite (when `dbPath` is configured) or in-memory. The s
 | 11 | Agent self-serve creation | ✅ Shipped |
 | 12 | Trustline & non-XLM asset support | ✅ Shipped |
 | 13-18 | Reliability hardening (atomic claim, idempotency, ambiguous submission, pre-check, docs) | ✅ Shipped |
+| 19 | Operator CLI v1 (health, agent lifecycle, approval, execution) | ✅ Shipped |
 
 ---
 
