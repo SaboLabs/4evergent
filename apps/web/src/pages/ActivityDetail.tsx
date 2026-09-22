@@ -29,8 +29,27 @@ export default function ActivityDetail({ agentId, activityId }: { agentId: strin
         <Card title="Type" value={activity.intent.type} />
         <Card title="Amount" value={amount + ' ' + asset} />
         <Card title="Status" value={activity.status} />
+        <Card title="Transaction Hash" value={activity.txHash ?? '-'} />
         <Card title="Created" value={new Date(activity.createdAt).toLocaleString()} />
       </div>
+      {activity.authorizationStatus && (
+        <div className="block">
+          <h2>Authorization</h2>
+          <div>{activity.authorizationStatus}</div>
+        </div>
+      )}
+      {activity.simulationResult && (
+        <div className="block">
+          <h2>Simulation</h2>
+          <table>
+            <tbody>
+              <tr><td>Result</td><td>{activity.simulationResult.success ? 'ok' : 'failed'}</td></tr>
+              <tr><td>Fee</td><td>{activity.simulationResult.fee}</td></tr>
+              {activity.simulationResult.error && <tr><td>Error</td><td>{activity.simulationResult.error}</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      )}
       {activity.error && (
         <div className="block">
           <h2>Error</h2>

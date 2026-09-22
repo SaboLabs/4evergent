@@ -90,6 +90,16 @@ Headers: optional `Idempotency-Key` (≤256 chars, scoped to owner+agent).
 Same key + same intent → returns the original activity (`200`).
 Same key + different intent → `409`.
 
+Agent status admission: the agent must be `active`. A `paused` or
+`disabled` agent rejects new intents before any activity, approval,
+execution, or queue record is created:
+
+- `409` → `{ "error": "agent is paused; new intents are rejected" }`
+- `409` → `{ "error": "agent is disabled; new intents are rejected" }`
+
+Existing approvals and in-flight executions are unaffected by a status
+change — the gate applies to new intents only.
+
 Behavior (policy decision):
 
 - Policy `deny` → `403` with intent response recording the denial

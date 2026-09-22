@@ -71,7 +71,7 @@ a.getAccount('<YOUR_PUBLIC_KEY>').then(acc => {
 ### 6. Run tests (deterministic, no secrets required)
 
 ```bash
-pnpm test  # 280 tests PASS
+pnpm test  # 290 tests PASS
 ```
 
 ### 7. Run simulation (no submission)

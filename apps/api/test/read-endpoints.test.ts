@@ -6,6 +6,8 @@ import type { Signer } from "@4evergent/stellar";
 import type { PolicyRules } from "@4evergent/shared";
 import type { AddressInfo } from "node:net";
 import { Keypair } from "@stellar/stellar-sdk";
+import { InMemoryExecutionStore } from "@4evergent/database";
+import type { ExecutionStore, ExecutionRecord } from "@4evergent/database";
 
 declare const fetch: typeof globalThis.fetch;
 
@@ -41,6 +43,7 @@ const TEST_AGENT = {
 };
 
 async function startServer(opts?: { policyRules?: Partial<PolicyRules>; registerAgent?: boolean }) {
+  const executionStore = new InMemoryExecutionStore();
   const server = await createApiServer({
     port: 0,
     horizonUrl: "https://horizon-testnet.stellar.org",
@@ -48,6 +51,7 @@ async function startServer(opts?: { policyRules?: Partial<PolicyRules>; register
     policyRules: opts?.policyRules,
     deferExecution: true,
     authProvider: new DevAuthProvider({ defaultOwnerId: "test" }),
+    executionStore,
   });
   if (opts?.registerAgent !== false) {
     server.registerAgent(TEST_AGENT);
@@ -56,12 +60,14 @@ async function startServer(opts?: { policyRules?: Partial<PolicyRules>; register
   return new Promise<{
     baseUrl: string;
     close: () => Promise<void>;
+    executionStore: ExecutionStore;
   }>((resolve) => {
     const http = server.server.listen(0, "127.0.0.1", () => {
       const addr = http.address() as AddressInfo;
       resolve({
         baseUrl: `http://127.0.0.1:${addr.port}`,
         close: () => server.close(),
+        executionStore,
       });
     });
   });
@@ -290,6 +296,111 @@ test("read endpoints never return raw XDR or transaction blobs", async () => {
     assert.ok(!/"xdr"/.test(blob), "read endpoints must not expose xdr field");
     assert.ok(!/"envelope"/.test(blob), "read endpoints must not expose envelope field");
     assert.ok(!/"tx_blob"/.test(blob), "read endpoints must not expose tx_blob field");
+  } finally {
+    await close();
+  }
+});
+
+// ===== Execution lifecycle visibility =====
+
+function makeExecution(overrides: Partial<ExecutionRecord> = {}): ExecutionRecord {
+  const now = new Date().toISOString();
+  return {
+    id: crypto.randomUUID(),
+    ownerId: "test",
+    agentId: "test-agent",
+    approvalId: null,
+    activityId: null,
+    intent: { type: "payment", asset: "XLM", destination: "GDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", amount: "10", reason: "test" },
+    status: "queued",
+    policyDecision: null,
+    simulationResult: null,
+    txHash: null,
+    submittedHash: null,
+    error: null,
+    attempt: 0,
+    nextRetryAt: null,
+    startedAt: null,
+    completedAt: null,
+    errorClass: null,
+    createdAt: now,
+    updatedAt: now,
+    ...overrides,
+  };
+}
+
+test("GET /executions/:id — confirmed execution readable with txHash and completedAt", async () => {
+  const { baseUrl, close, executionStore } = await startServer();
+  try {
+    const execution = makeExecution({ status: "confirmed", txHash: "a".repeat(64), completedAt: new Date().toISOString() });
+    await executionStore.record(execution);
+
+    const res = await get(baseUrl, `/executions/${execution.id}`);
+    assert.equal(res.status, 200);
+    assert.equal(res.body.execution.status, "confirmed");
+    assert.equal(res.body.execution.txHash, "a".repeat(64));
+    assert.ok(res.body.execution.completedAt);
+  } finally {
+    await close();
+  }
+});
+
+test("GET /executions/:id — dead_letter execution readable with error and attempt count", async () => {
+  const { baseUrl, close, executionStore } = await startServer();
+  try {
+    const execution = makeExecution({
+      status: "dead_letter",
+      error: "Max retries exceeded: network timeout",
+      attempt: 3,
+      errorClass: "transient",
+      completedAt: new Date().toISOString(),
+    });
+    await executionStore.record(execution);
+
+    const res = await get(baseUrl, `/executions/${execution.id}`);
+    assert.equal(res.status, 200);
+    assert.equal(res.body.execution.status, "dead_letter");
+    assert.ok(res.body.execution.error);
+    assert.equal(res.body.execution.attempt, 3);
+    assert.equal(res.body.execution.errorClass, "transient");
+  } finally {
+    await close();
+  }
+});
+
+test("GET /agents/:id/executions — mixed lifecycle statuses all returned", async () => {
+  const { baseUrl, close, executionStore } = await startServer();
+  try {
+    await executionStore.record(makeExecution({ status: "queued" }));
+    await executionStore.record(makeExecution({ status: "executing", startedAt: new Date().toISOString() }));
+    await executionStore.record(makeExecution({ status: "submitted", txHash: "b".repeat(64) }));
+    await executionStore.record(makeExecution({ status: "confirmed", txHash: "c".repeat(64), completedAt: new Date().toISOString() }));
+    await executionStore.record(makeExecution({ status: "failed", error: "on-chain failed", errorClass: "permanent", completedAt: new Date().toISOString() }));
+    await executionStore.record(makeExecution({ status: "dead_letter", error: "max retries", attempt: 3 }));
+
+    const res = await get(baseUrl, "/agents/test-agent/executions");
+    assert.equal(res.status, 200);
+    assert.equal(res.body.executions.length, 6);
+    const statuses = new Set(res.body.executions.map((e: ExecutionRecord) => e.status));
+    assert.ok(statuses.has("queued"));
+    assert.ok(statuses.has("executing"));
+    assert.ok(statuses.has("submitted"));
+    assert.ok(statuses.has("confirmed"));
+    assert.ok(statuses.has("failed"));
+    assert.ok(statuses.has("dead_letter"));
+  } finally {
+    await close();
+  }
+});
+
+test("GET /executions/:id — owner isolation on lifecycle reads (cross-owner 404)", async () => {
+  const { baseUrl, close, executionStore } = await startServer();
+  try {
+    const execution = makeExecution({ ownerId: "owner-b", status: "confirmed", txHash: "d".repeat(64) });
+    await executionStore.record(execution);
+
+    const res = await get(baseUrl, `/executions/${execution.id}`);
+    assert.equal(res.status, 404);
   } finally {
     await close();
   }
