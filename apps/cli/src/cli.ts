@@ -253,6 +253,268 @@ async function cmdExecutionGet(executionId: string) {
   }
 }
 
+// --- Policy / Activity / Schedule / Intent commands ---
+
+function formatPolicy(p: any) {
+  const rules = p.policy ?? {};
+  const fmt = (v: any) => (typeof v === "object" && v !== null ? JSON.stringify(v) : String(v));
+  return `Policy:
+  Agent:        ${p.agentId}
+  Version:      ${p.version ?? "-"}
+  Updated:      ${p.updatedAt ?? "-"}
+  Max Tx:       ${fmt(rules.maxTxAmount)}
+  Daily Limit:  ${fmt(rules.dailySpendingLimit)}
+  Assets:       ${Array.isArray(rules.allowedAssets) ? rules.allowedAssets.join(", ") : "-"}
+  Contracts:    ${Array.isArray(rules.allowedContractIds) ? rules.allowedContractIds.join(", ") : "-"}
+  Tx Types:     ${fmt(rules.txTypeRestrictions)}
+  Approval Th:  ${rules.approvalThreshold ?? "-"}
+  Human > :     ${rules.requireHumanApprovalForAmountAbove ?? "-"}
+`;
+}
+
+function formatActivity(a: any) {
+  return `Activity:
+  ID:           ${a.id}
+  Agent:        ${a.agentId}
+  Type:         ${a.intent?.type ?? "-"}
+  Amount:       ${a.intent?.amount ?? "-"} ${a.intent?.asset ?? ""}
+  Status:       ${a.status}
+  TxHash:       ${a.txHash ?? "-"}
+  Error:        ${a.error ?? "-"}
+  Created:      ${a.createdAt ?? "-"}
+`;
+}
+
+function formatSchedule(s: any) {
+  return `Schedule:
+  ID:           ${s.id}
+  Agent:        ${s.agentId}
+  Status:       ${s.status}
+  Expression:   ${s.scheduleExpression}
+  Timezone:     ${s.timezone}
+  Next Run:     ${s.nextRunAt}
+  Last Run:     ${s.lastRunAt ?? "-"}
+  Created:      ${s.createdAt}
+  Updated:      ${s.updatedAt}
+  Intent:       ${s.intent?.type ?? "-"} ${s.intent?.amount ? `${s.intent.amount} ${s.intent.asset ?? ""}` : ""} ${s.intent?.assetCode ? `${s.intent.assetCode} (trustline)` : ""} ${s.intent?.contractId ? `${s.intent.contractId}::${s.intent.function}` : ""}
+`;
+}
+
+/**
+ * Build a typed intent object from CLI args.
+ * Mirrors the AgentIntent union consumed by POST /agents/:id/intents.
+ * `account_settings` is intentionally NOT exposed — the transaction
+ * pipeline does not support it yet (server rejects with 400).
+ */
+function buildIntentArgs(args: string[]): { intent: any; error?: string } {
+  const type = args[0];
+  if (!type) return { intent: null, error: "intent type required (payment | trustline | contract_call)" };
+
+  switch (type) {
+    case "payment": {
+      const [, asset, amount, destination, reason, memo] = args;
+      if (!asset || !amount || !destination || !reason) {
+        return { intent: null, error: "payment requires: <asset> <amount> <destination> <reason> [memo]" };
+      }
+      return {
+        intent: {
+          type: "payment",
+          asset,
+          destination,
+          amount,
+          reason,
+          ...(memo ? { memo } : {}),
+        },
+      };
+    }
+    case "trustline": {
+      const [, assetCode, issuer, reason, limit] = args;
+      if (!assetCode || !issuer || !reason) {
+        return { intent: null, error: "trustline requires: <assetCode> <issuer> <reason> [limit]" };
+      }
+      return {
+        intent: {
+          type: "trustline",
+          assetCode,
+          issuer,
+          reason,
+          ...(limit ? { limit } : {}),
+        },
+      };
+    }
+    case "contract_call": {
+      const [, contractId, functionName, argsJson, reason] = args;
+      if (!contractId || !functionName || !argsJson || !reason) {
+        return { intent: null, error: "contract_call requires: <contractId> <function> <args-json> <reason>" };
+      }
+      let parsedArgs: unknown;
+      try {
+        parsedArgs = JSON.parse(argsJson);
+      } catch {
+        return { intent: null, error: "contract_call args must be a valid JSON array" };
+      }
+      if (!Array.isArray(parsedArgs)) {
+        return { intent: null, error: "contract_call args must be a JSON array" };
+      }
+      return {
+        intent: {
+          type: "contract_call",
+          contractId,
+          function: functionName,
+          args: parsedArgs,
+          reason,
+        },
+      };
+    }
+    case "account_settings":
+      return { intent: null, error: "account_settings is not supported by the transaction pipeline" };
+    default:
+      return { intent: null, error: `unknown intent type '${type}' (supported: payment, trustline, contract_call)` };
+  }
+}
+
+async function cmdPolicyGet(agentId: string) {
+  if (!agentId) {
+    console.error("Usage: 4evergent policy get <agent-id>");
+    return 1;
+  }
+  try {
+    const { body } = await request(`/agents/${encodeURIComponent(agentId)}/policy`);
+    console.log(formatPolicy(body));
+    return 0;
+  } catch (err: any) {
+    console.error(`Error: ${err.message}`);
+    return 1;
+  }
+}
+
+async function cmdActivityList(agentId: string, limit: string) {
+  if (!agentId) {
+    console.error("Usage: 4evergent activity list <agent-id> [limit]");
+    return 1;
+  }
+  const n = Number(limit || "50");
+  if (!Number.isInteger(n) || n < 1 || n > 100) {
+    console.error("limit must be an integer between 1 and 100");
+    return 1;
+  }
+  try {
+    const { body } = await request(`/agents/${encodeURIComponent(agentId)}/activity?limit=${n}`);
+    const activity = body.activity ?? [];
+    if (activity.length === 0) {
+      console.log("No activity found.");
+      return 0;
+    }
+    console.log(`ID\t\tAgent\t\tType\t\tStatus\t\tCreated`);
+    for (const a of activity) {
+      console.log(`${a.id.slice(0, 18)}\t${a.agentId.slice(0, 12)}\t${a.intent?.type ?? "-"}\t${a.status}\t${new Date(a.createdAt).toLocaleString()}`);
+    }
+    return 0;
+  } catch (err: any) {
+    console.error(`Error: ${err.message}`);
+    return 1;
+  }
+}
+
+async function cmdScheduleList(agentId: string, limit: string) {
+  if (!agentId) {
+    console.error("Usage: 4evergent schedule list <agent-id> [limit]");
+    return 1;
+  }
+  const n = Number(limit || "50");
+  if (!Number.isInteger(n) || n < 1 || n > 100) {
+    console.error("limit must be an integer between 1 and 100");
+    return 1;
+  }
+  try {
+    const { body } = await request(`/agents/${encodeURIComponent(agentId)}/schedules?limit=${n}`);
+    const schedules = body.schedules ?? [];
+    if (schedules.length === 0) {
+      console.log("No schedules found.");
+      return 0;
+    }
+    console.log(`ID\t\tAgent\t\tStatus\t\tExpression\tNext Run`);
+    for (const s of schedules) {
+      console.log(`${s.id.slice(0, 18)}\t${s.agentId.slice(0, 12)}\t${s.status}\t${s.scheduleExpression}\t${s.nextRunAt}`);
+    }
+    return 0;
+  } catch (err: any) {
+    console.error(`Error: ${err.message}`);
+    return 1;
+  }
+}
+
+async function cmdScheduleGet(agentId: string, scheduleId: string) {
+  if (!agentId || !scheduleId) {
+    console.error("Usage: 4evergent schedule get <agent-id> <schedule-id>");
+    return 1;
+  }
+  try {
+    const { body } = await request(`/agents/${encodeURIComponent(agentId)}/schedules/${encodeURIComponent(scheduleId)}`);
+    console.log(formatSchedule(body.schedule));
+    return 0;
+  } catch (err: any) {
+    console.error(`Error: ${err.message}`);
+    return 1;
+  }
+}
+
+async function cmdIntentSubmit(agentId: string, args: string[], idempotencyKey: string | null) {
+  if (!agentId) {
+    console.error("Usage: 4evergent intent submit <agent-id> <type> [args...] [--idempotency-key <key>]");
+    console.error("Types: payment | trustline | contract_call");
+    return 1;
+  }
+
+  // Extract --idempotency-key flag if present
+  let key: string | null = idempotencyKey;
+  const flagIdx = args.indexOf("--idempotency-key");
+  if (flagIdx !== -1) {
+    key = args[flagIdx + 1] ?? null;
+    args = args.slice(0, flagIdx);
+  }
+
+  const { intent, error } = buildIntentArgs(args);
+  if (error) {
+    console.error(`Error: ${error}`);
+    return 1;
+  }
+
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (key) headers["Idempotency-Key"] = key;
+
+  try {
+    const { status, body } = await request(`/agents/${encodeURIComponent(agentId)}/intents`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(intent),
+    });
+    // 200 = idempotent duplicate, 202 = accepted (requires approval or executing)
+    console.log(`Intent ${status === 200 ? "(idempotent duplicate)" : status === 202 ? "(accepted)" : "(submitted)"}: agent=${body.agentId} activity=${body.activityId} status=${body.status}`);
+    if (body.approvalId) console.log(`  Approval required: approvalId=${body.approvalId}`);
+    if (body.txHash) console.log(`  TxHash: ${body.txHash}`);
+    if (body.policyDecision) console.log(`  Policy: ${body.policyDecision.result} (${body.policyDecision.reason})`);
+    if (body.error) console.log(`  Error: ${body.error}`);
+    return 0;
+  } catch (err: any) {
+    if (err instanceof ApiError && err.status === 0) {
+      // Network failure — the request MAY have been transmitted. Never retry
+      // automatically; the server dedupes on Idempotency-Key when present.
+      console.error(`Error: ${err.message}`);
+      if (key) {
+        console.error(`The request outcome is UNKNOWN (network failure after possible transmission).`);
+        console.error(`Retry manually with the SAME --idempotency-key to avoid a duplicate intent.`);
+      } else {
+        console.error(`The request outcome is UNKNOWN (network failure after possible transmission).`);
+        console.error(`No Idempotency-Key was provided — retrying may create a duplicate intent.`);
+      }
+    } else {
+      console.error(`Error: ${err.message}`);
+    }
+    return 1;
+  }
+}
+
 // --- CLI dispatch ---
 
 const argv = process.argv.slice(2);
@@ -300,10 +562,40 @@ async function main(): Promise<number> {
           console.error("Usage: 4evergent execution <list|get> [id]");
           return 1;
       }
+    case "policy":
+      switch (sub) {
+        case "get": return cmdPolicyGet(argv[2] ?? "");
+        default:
+          console.error("Usage: 4evergent policy get <agent-id>");
+          return 1;
+      }
+    case "activity":
+      switch (sub) {
+        case "list": return cmdActivityList(argv[2] ?? "", argv[3] ?? "");
+        default:
+          console.error("Usage: 4evergent activity list <agent-id> [limit]");
+          return 1;
+      }
+    case "schedule":
+      switch (sub) {
+        case "list": return cmdScheduleList(argv[2] ?? "", argv[3] ?? "");
+        case "get": return cmdScheduleGet(argv[2] ?? "", argv[3] ?? "");
+        default:
+          console.error("Usage: 4evergent schedule <list|get> [args...]");
+          return 1;
+      }
+    case "intent":
+      switch (sub) {
+        case "submit": return cmdIntentSubmit(argv[2] ?? "", argv.slice(3), null);
+        default:
+          console.error("Usage: 4evergent intent submit <agent-id> <type> [args...] [--idempotency-key <key>]");
+          console.error("Types: payment | trustline | contract_call");
+          return 1;
+      }
     case "--help":
     case "-h":
     case "help":
-      console.log("4evergent Operator CLI\n\nCommands:\n  health\n  agent list | get <id> | pause <id> | resume <id> | disable <id>\n  approval list | approve <id> | reject <id>\n  execution list | get <id>");
+      console.log("4evergent Operator CLI\n\nCommands:\n  health\n  agent list | get <id> | pause <id> | resume <id> | disable <id>\n  approval list | approve <id> | reject <id>\n  execution list | get <id>\n  policy get <agent-id>\n  activity list <agent-id> [limit]\n  schedule list <agent-id> [limit] | get <agent-id> <schedule-id>\n  intent submit <agent-id> <type> [args...] [--idempotency-key <key>]");
       return 0;
     default:
       console.error(`Unknown command: ${cmd}`);

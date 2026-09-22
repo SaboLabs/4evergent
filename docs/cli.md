@@ -41,7 +41,42 @@ export FOREGENT_API_KEY=your-api-key-here
 4evergent approval reject <id>              Reject an intent
 4evergent execution list                    List executions across all agents
 4evergent execution get <id>                Show execution detail
+4evergent policy get <agent-id>             Show effective policy rules
+4evergent activity list <agent-id> [limit]  List agent activity (limit 1-100, default 50)
+4evergent schedule list <agent-id> [limit]  List agent schedules (limit 1-100, default 50)
+4evergent schedule get <agent-id> <sch-id>  Show schedule detail
+4evergent intent submit <agent-id> <type> [args...] [--idempotency-key <key>]
+                                            Submit an intent (see Intent types below)
 ```
+
+## Intent submission
+
+Supported intent types (accepted by the transaction pipeline):
+
+```
+payment       <asset> <amount> <destination> <reason> [memo]
+trustline     <assetCode> <issuer> <reason> [limit]
+contract_call <contractId> <function> <args-json-array> <reason>
+```
+
+`account_settings` is NOT supported by the transaction pipeline and is
+rejected by the CLI.
+
+The server decides the outcome: policy `allow` executes directly,
+`requires_approval` returns an approvalId (approve it later with
+`4evergent approval approve`), `deny` is rejected with 403.
+
+### Idempotency
+
+Use `--idempotency-key <key>` to make submissions safe against network
+timeouts: the same key + same intent returns the original result instead
+of creating a duplicate (HTTP 200), and the same key with a different
+intent is rejected with 409.
+
+If the CLI reports a network failure, the request outcome is UNKNOWN —
+the request may have reached the server. Retry manually with the SAME
+`--idempotency-key`. The CLI never retries automatically and never
+submits twice silently.
 
 ## Examples
 
@@ -53,13 +88,22 @@ export FOREGENT_API_KEY=your-api-key-here
 4evergent approval approve ap-123
 4evergent execution list
 4evergent execution get exec-123
+4evergent policy get agent-123
+4evergent activity list agent-123
+4evergent activity list agent-123 10
+4evergent schedule list agent-123
+4evergent schedule get agent-123 sch-123
+4evergent intent submit agent-123 payment XLM 25 GDAAAA... "weekly payout"
+4evergent intent submit agent-123 payment XLM 25 GDAAAA... "weekly payout" --idempotency-key weekly-42
+4evergent intent submit agent-123 trustline USDC GDAAAA... "add USDC trustline" 1000
+4evergent intent submit agent-123 contract_call CABCD... transfer '["arg1","arg2"]' "transfer funds"
 ```
 
 ## Output
 
 Default output is human-readable. Every command exits `0` on success,
 non-zero on failure (network error, HTTP 4xx/5xx). The `--json` flag is
-not yet supported — planned for CLI Phase 2.
+not yet supported — planned for a future CLI phase.
 
 ## Security
 

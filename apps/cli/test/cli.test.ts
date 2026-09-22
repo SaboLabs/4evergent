@@ -22,11 +22,19 @@ interface RunResult {
 
 function run(
   args: string[],
-  opts: { env?: Record<string, string>; responses?: Array<{ match: string; status: number; body: any }> } = {}
+  opts: { env?: Record<string, string>; responses?: Array<{ match: string; status: number; body: any }>; networkFail?: boolean } = {}
 ): RunResult {
   const responses = opts.responses ?? [];
   // Inline mock server: intercepts fetch inside the child process before CLI runs.
-  const prelude = `
+  const prelude = opts.networkFail
+    ? `
+    globalThis.fetch = async () => {
+      const err = new Error("connect ECONNREFUSED 127.0.0.1:9");
+      (err as any).code = "ECONNREFUSED";
+      throw err;
+    };
+  `
+    : `
     const responses = ${JSON.stringify(responses)};
     const realFetch = globalThis.fetch;
     globalThis.fetch = async (url, init) => {
@@ -78,8 +86,7 @@ test("CLI: health success → exit 0, prints status", () => {
 
 test("CLI: health failure (network error) → exit non-zero", () => {
   const r = run(["health"], {
-    env: { FOREGENT_API_URL: "http://127.0.0.1:9" }, // closed port
-    responses: [],
+    networkFail: true,
   });
   assert.notEqual(r.code, 0);
   assert.match(r.stderr, /Health check failed|Cannot connect/);
@@ -223,7 +230,7 @@ test("CLI: HTTP 409 → exit 409", () => {
 
 test("CLI: network failure → exit non-zero, no secret leak", () => {
   const r = run(["agent", "list"], {
-    env: { FOREGENT_API_URL: "http://127.0.0.1:9" },
+    networkFail: true,
   });
   assert.notEqual(r.code, 0);
 });
@@ -258,4 +265,226 @@ test("CLI: no command → usage, exit 1", () => {
   const r = run([]);
   assert.equal(r.code, 1);
   assert.match(r.stderr, /Usage/);
+});
+
+// ===== Phase 2: policy / activity / schedule / intent =====
+
+test("CLI v2: policy get → prints rules", () => {
+  const r = run(["policy", "get", "agent-1"], {
+    responses: [
+      { match: "/agents/agent-1/policy", status: 200, body: { agentId: "agent-1", policy: { maxTxAmount: { XLM: "1000" }, allowedAssets: ["XLM"], approvalThreshold: "10" }, version: 2, updatedAt: "2026-01-01T00:00:00Z" } },
+    ],
+  });
+  assert.equal(r.code, 0);
+  assert.match(r.stdout, /agent-1/);
+  assert.match(r.stdout, /Version:\s+2/);
+  assert.match(r.stdout, /XLM/);
+  assert.match(r.stdout, /1000/);
+});
+
+test("CLI v2: policy get 404 → exit 1", () => {
+  const r = run(["policy", "get", "nope"], {
+    responses: [{ match: "/agents/nope/policy", status: 404, body: { error: "not found" } }],
+  });
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /404/);
+});
+
+test("CLI v2: policy get 401 → exit 1", () => {
+  const r = run(["policy", "get", "agent-1"], {
+    responses: [{ match: "/agents/agent-1/policy", status: 401, body: { error: "unauthorized" } }],
+  });
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /401/);
+});
+
+test("CLI v2: activity list → prints activity", () => {
+  const r = run(["activity", "list", "agent-1"], {
+    responses: [
+      { match: "/agents/agent-1/activity", status: 200, body: { agentId: "agent-1", activity: [{ id: "act-1", agentId: "agent-1", intent: { type: "payment", amount: "10", asset: "XLM" }, status: "requires_approval", txHash: null, error: null, createdAt: "2026-01-01T00:00:00Z" }] } },
+    ],
+  });
+  assert.equal(r.code, 0);
+  assert.match(r.stdout, /act-1/);
+  assert.match(r.stdout, /requires_approval/);
+});
+
+test("CLI v2: activity list with limit → passes query param", () => {
+  const r = run(["activity", "list", "agent-1", "5"], {
+    responses: [
+      { match: "/agents/agent-1/activity?limit=5", status: 200, body: { agentId: "agent-1", activity: [] } },
+    ],
+  });
+  assert.equal(r.code, 0);
+  assert.match(r.stdout, /No activity found/);
+});
+
+test("CLI v2: activity list 404 → exit 1", () => {
+  const r = run(["activity", "list", "nope"], {
+    responses: [{ match: "/agents/nope/activity", status: 404, body: { error: "not found" } }],
+  });
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /404/);
+});
+
+test("CLI v2: schedule list → prints schedules", () => {
+  const r = run(["schedule", "list", "agent-1"], {
+    responses: [
+      { match: "/agents/agent-1/schedules", status: 200, body: { agentId: "agent-1", schedules: [{ id: "sch-1", agentId: "agent-1", status: "active", scheduleExpression: "0 * * * *", timezone: "UTC", nextRunAt: "2026-01-01T01:00:00Z", lastRunAt: null, intent: { type: "payment", amount: "5", asset: "XLM" }, createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-01T00:00:00Z" }] } },
+    ],
+  });
+  assert.equal(r.code, 0);
+  assert.match(r.stdout, /sch-1/);
+  assert.match(r.stdout, /active/);
+  assert.match(r.stdout, /0 \* \* \* \*/);
+});
+
+test("CLI v2: schedule list limit → passes query param", () => {
+  const r = run(["schedule", "list", "agent-1", "10"], {
+    responses: [
+      { match: "/agents/agent-1/schedules?limit=10", status: 200, body: { agentId: "agent-1", schedules: [] } },
+    ],
+  });
+  assert.equal(r.code, 0);
+  assert.match(r.stdout, /No schedules found/);
+});
+
+test("CLI v2: schedule get → prints full detail", () => {
+  const r = run(["schedule", "get", "agent-1", "sch-1"], {
+    responses: [
+      { match: "/agents/agent-1/schedules/sch-1", status: 200, body: { schedule: { id: "sch-1", agentId: "agent-1", ownerId: "owner-1", status: "active", scheduleExpression: "0 12 * * *", timezone: "UTC", nextRunAt: "2026-01-01T12:00:00Z", lastRunAt: "2026-01-01T00:00:00Z", intent: { type: "payment", asset: "XLM", amount: "5", destination: "GAAA", reason: "daily" }, createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-01T00:00:00Z" } } },
+    ],
+  });
+  assert.equal(r.code, 0);
+  assert.match(r.stdout, /sch-1/);
+  assert.match(r.stdout, /0 12 \* \* \*/);
+  assert.match(r.stdout, /payment/);
+});
+
+test("CLI v2: schedule get 404 → exit 1", () => {
+  const r = run(["schedule", "get", "agent-1", "nope"], {
+    responses: [{ match: "/agents/agent-1/schedules/nope", status: 404, body: { error: "not found" } }],
+  });
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /404/);
+});
+
+test("CLI v2: intent submit payment → 202 accepted", () => {
+  const r = run(["intent", "submit", "agent-1", "payment", "XLM", "10", "GDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "test payment"], {
+    responses: [
+      { match: "/agents/agent-1/intents", status: 202, body: { activityId: "act-9", agentId: "agent-1", status: "requires_approval", approvalId: "ap-9", policyDecision: { result: "requires_approval", reason: "above threshold", rule: "approval" } } },
+    ],
+  });
+  assert.equal(r.code, 0);
+  assert.match(r.stdout, /accepted/);
+  assert.match(r.stdout, /act-9/);
+  assert.match(r.stdout, /ap-9/);
+});
+
+test("CLI v2: intent submit trustline → 202", () => {
+  const r = run(["intent", "submit", "agent-1", "trustline", "USDC", "GDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "add trustline"], {
+    responses: [
+      { match: "/agents/agent-1/intents", status: 202, body: { activityId: "act-10", agentId: "agent-1", status: "requires_approval", approvalId: "ap-10" } },
+    ],
+  });
+  assert.equal(r.code, 0);
+  assert.match(r.stdout, /act-10/);
+});
+
+test("CLI v2: intent submit contract_call → 202", () => {
+  const r = run(["intent", "submit", "agent-1", "contract_call", "CABC123", "transfer", '["a","b"]', "call transfer"], {
+    responses: [
+      { match: "/agents/agent-1/intents", status: 202, body: { activityId: "act-11", agentId: "agent-1", status: "requires_approval", approvalId: "ap-11" } },
+    ],
+  });
+  assert.equal(r.code, 0);
+  assert.match(r.stdout, /act-11/);
+});
+
+test("CLI v2: intent submit 200 idempotent duplicate", () => {
+  const r = run(["intent", "submit", "agent-1", "payment", "XLM", "10", "GDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "dup", "--idempotency-key", "key-1"], {
+    responses: [
+      { match: "/agents/agent-1/intents", status: 200, body: { activityId: "act-original", agentId: "agent-1", status: "requires_approval" } },
+    ],
+  });
+  assert.equal(r.code, 0);
+  assert.match(r.stdout, /idempotent duplicate/);
+  assert.match(r.stdout, /act-original/);
+});
+
+test("CLI v2: intent submit 400 validation error", () => {
+  const r = run(["intent", "submit", "agent-1", "payment", "XLM", "0", "GAAA", "bad"], {
+    responses: [
+      { match: "/agents/agent-1/intents", status: 400, body: { error: "Intent validation failed: amount must be positive" } },
+    ],
+  });
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /400/);
+  assert.match(r.stderr, /validation/);
+});
+
+test("CLI v2: intent submit 403 policy denial", () => {
+  const r = run(["intent", "submit", "agent-1", "payment", "XLM", "9999", "GDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "too big"], {
+    responses: [
+      { match: "/agents/agent-1/intents", status: 403, body: { activityId: "act-denied", agentId: "agent-1", status: "rejected", policyDecision: { result: "deny", reason: "max tx", rule: "maxTxAmount" } } },
+    ],
+  });
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /403/);
+});
+
+test("CLI v2: intent submit 404 agent not found", () => {
+  const r = run(["intent", "submit", "nope", "payment", "XLM", "10", "GDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "x"], {
+    responses: [
+      { match: "/agents/nope/intents", status: 404, body: { error: "not found" } },
+    ],
+  });
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /404/);
+});
+
+test("CLI v2: intent submit 409 conflict", () => {
+  const r = run(["intent", "submit", "agent-1", "payment", "XLM", "10", "GDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "x", "--idempotency-key", "key-conflict"], {
+    responses: [
+      { match: "/agents/agent-1/intents", status: 409, body: { error: "Idempotency-Key already used with a different intent" } },
+    ],
+  });
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /409/);
+});
+
+test("CLI v2: intent submit account_settings rejected locally", () => {
+  const r = run(["intent", "submit", "agent-1", "account_settings", "setting", "value", "reason"]);
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /not supported/);
+});
+
+test("CLI v2: intent submit missing args → usage", () => {
+  const r = run(["intent", "submit", "agent-1", "payment"]);
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /payment requires/);
+});
+
+test("CLI v2: intent submit contract_call invalid args JSON", () => {
+  const r = run(["intent", "submit", "agent-1", "contract_call", "CABC", "fn", "not-json", "reason"]);
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /JSON array/);
+});
+
+test("CLI v2: intent submit network failure warns about idempotency", () => {
+  const r = run(["intent", "submit", "agent-1", "payment", "XLM", "10", "GDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "x", "--idempotency-key", "key-net"], {
+    networkFail: true,
+  });
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /UNKNOWN/);
+  assert.match(r.stderr, /SAME --idempotency-key/);
+});
+
+test("CLI v2: intent submit network failure without key warns duplicate risk", () => {
+  const r = run(["intent", "submit", "agent-1", "payment", "XLM", "10", "GDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "x"], {
+    networkFail: true,
+  });
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /UNKNOWN/);
+  assert.match(r.stderr, /No Idempotency-Key/);
 });

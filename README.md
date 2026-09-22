@@ -234,6 +234,10 @@ export FOREGENT_API_KEY=your-api-key
 4evergent approval list
 4evergent approval approve <id>
 4evergent execution list
+4evergent policy get <agent-id>
+4evergent activity list <agent-id>
+4evergent schedule list <agent-id>
+4evergent intent submit <agent-id> <type> [args...]
 ```
 
 See [docs/cli.md](docs/cli.md) for full command reference.
