@@ -319,8 +319,17 @@ export async function createApiServer(options: ServerOptions) {
 
     const agentStatusStore = {
       get: async (id: string) => {
+        // Fast path: in-memory map (covers agents registered this session).
         const agent = agents.get(id);
-        return agent ? { id: agent.id, status: agent.status, ownerId: agent.ownerId } : null;
+        if (agent) return { id: agent.id, status: agent.status, ownerId: agent.ownerId };
+        // Fallback: persistent store (covers agents surviving a restart).
+        // Mirrors ResourceAuthorizationService.resolveAgent logic so the
+        // scheduler and authorization layer agree on agent status.
+        if (agentStore) {
+          const dbAgent = await agentStore.get(id);
+          if (dbAgent) return { id: dbAgent.id, status: dbAgent.status, ownerId: dbAgent.ownerId };
+        }
+        return null;
       },
     };
 

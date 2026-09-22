@@ -98,6 +98,8 @@ export class InMemoryActivityStore implements ActivityStore {
   private records = new Map<string, ActivityRecord>();
   private dailySpending = new Map<string, number>();
   private idempotencyLock: Promise<unknown> = Promise.resolve();
+  /** Serializes daily-spending check+commit per store instance (atomicity). */
+  private dailySpendingLock: Promise<unknown> = Promise.resolve();
 
   async record(record: ActivityRecord): Promise<void> {
     this.records.set(record.id, record);
@@ -179,11 +181,19 @@ export class InMemoryActivityStore implements ActivityStore {
       .slice(0, 10);
 
     const mapKey = `${agentId}:${asset}:${day}`;
-    const current = this.dailySpending.get(mapKey) ?? 0;
-    if (current + amountNum > limitNum) return false;
 
-    this.dailySpending.set(mapKey, current + amountNum);
-    return true;
+    // Serialize check+commit through a per-instance promise chain so two
+    // concurrent reservations cannot both read the same "current" value and
+    // both commit past the limit. Mirrors recordIdempotent's approach; SQLite
+    // achieves the same via a conditional UPDATE.
+    const result = this.dailySpendingLock.then(() => {
+      const current = this.dailySpending.get(mapKey) ?? 0;
+      if (current + amountNum > limitNum) return false;
+      this.dailySpending.set(mapKey, current + amountNum);
+      return true;
+    });
+    this.dailySpendingLock = result.catch(() => undefined);
+    return result;
   }
 
   async update(id: string, patch: Partial<ActivityRecord>): Promise<ActivityRecord | null> {
